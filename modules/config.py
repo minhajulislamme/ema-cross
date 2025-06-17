@@ -25,7 +25,7 @@ else:
 RECV_WINDOW = int(os.getenv('BINANCE_RECV_WINDOW', '10000'))
 
 # Trading parameters
-TRADING_SYMBOL = os.getenv('TRADING_SYMBOL', 'SOLUSDT')
+TRADING_SYMBOL = os.getenv('TRADING_SYMBOL', 'SUIUSDT')
 TRADING_TYPE = 'FUTURES'  # Use futures trading
 LEVERAGE = int(os.getenv('LEVERAGE', '10'))
 MARGIN_TYPE = os.getenv('MARGIN_TYPE', 'ISOLATED')  # ISOLATED or CROSSED
@@ -56,11 +56,12 @@ COMPOUND_MIN_WIN_RATE = float(os.getenv('COMPOUND_MIN_WIN_RATE', '0.6'))  # Requ
 COMPOUND_MAX_DRAWDOWN = float(os.getenv('COMPOUND_MAX_DRAWDOWN', '0.15'))  # Pause if >15% drawdown
 COMPOUND_SCALING_FACTOR = float(os.getenv('COMPOUND_SCALING_FACTOR', '0.5'))  # Reduce compounding if performance poor
 
-# Technical indicator parameters - Simple EMA Crossover Strategy
+# Technical indicator parameters - Enhanced EMA Crossover Strategy with Trend Filter
 
-# EMA parameters (Simple 9/26 EMA Crossover - No confirmations needed)
+# EMA parameters (Enhanced 9/21/50 EMA setup for better responsiveness)
 FAST_EMA = int(os.getenv('FAST_EMA', '9'))     # Fast EMA (9 period)
-SLOW_EMA = int(os.getenv('SLOW_EMA', '26'))    # Slow EMA (26 period)
+SLOW_EMA = int(os.getenv('SLOW_EMA', '21'))    # Slow EMA (21 period) - More responsive than 26
+TREND_EMA = int(os.getenv('TREND_EMA', '50'))  # Trend filter EMA (50 period)
 
 TIMEFRAME = os.getenv('TIMEFRAME', '15m')
 

@@ -1,0 +1,14 @@
+
+# Trading specific files
+trading_history.json
+backtest_results/
+performance_data/
+trade_logs/
+*.csv
+logs
+reports
+state
+
+
+
+

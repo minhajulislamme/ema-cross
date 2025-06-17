@@ -734,6 +734,21 @@ def check_for_signals(symbol=None):
         if not binance_client:
             logger.error("Binance client not initialized. Cannot place trades.")
             return
+        
+        # Handle None signal - do nothing
+        if signal is None:
+            logger.info("No signal generated (None). Skipping trading action.")
+            return
+            
+        # Handle HOLD signal - do nothing but log position status
+        if signal == "HOLD":
+            logger.info("HOLD signal received. No trading action taken.")
+            if position and abs(position['position_amount']) > 0:
+                position_side = "LONG" if position['position_amount'] > 0 else "SHORT"
+                logger.info(f"Current position: {position_side} {abs(position['position_amount'])} {symbol} at {position.get('entry_price', 'unknown')} (unrealized PnL: {position.get('unrealized_pnl', 0):.4f})")
+            else:
+                logger.info("No open position. Waiting for clear BUY or SELL signal.")
+            return
             
         # Process signals with normal logic (BUY signal creates LONG position, SELL signal creates SHORT position)
         if signal == "BUY":  # Process BUY signal as BUY order
@@ -1656,7 +1671,7 @@ def perform_test_trade(symbol=TRADING_SYMBOL):
                 qty_precision = 3  
                 min_qty = 0.001
                 min_notional = 100.0
-            elif symbol == "SOLUSDT":
+            elif symbol == "SUIUSDT":
                 qty_precision = 1
                 min_qty = 0.1
                 min_notional = 100.0
