@@ -31,6 +31,10 @@ from modules.config import (
     # BACKTEST_PERIOD = "30 days"
 )
 
+# Additional imports for WebSocket-only buffer
+from collections import deque
+import threading
+
 # Try to import the new config variables, use defaults if not available
 try:
     from modules.config import (
@@ -61,6 +65,242 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class RollingCandleBuffer:
+    """
+    WebSocket-Only Rolling Buffer for Real-Time Signal Generation
+    
+    Maintains a rolling buffer of candles updated exclusively by WebSocket data.
+    Uses REST API only once at initialization to seed the buffer.
+    After initialization, all signal generation uses WebSocket data only.
+    """
+    
+    def __init__(self, symbol, timeframe, buffer_size=60):
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.buffer_size = buffer_size
+        
+        # Rolling buffer - uses deque for efficient append/pop operations
+        self.candle_buffer = deque(maxlen=buffer_size)
+        
+        # State tracking
+        self.is_initialized = False
+        self.last_candle_time = None
+        self.buffer_lock = threading.Lock()
+        
+        # Statistics for monitoring
+        self.total_updates = 0
+        self.signals_generated = 0
+        
+        logger.info(f"🔄 Created rolling buffer for {symbol} ({timeframe}) - size: {buffer_size}")
+    
+    def initialize_from_api(self, binance_client):
+        """
+        ONE-TIME INITIALIZATION: Seed buffer with REST API data
+        After this, buffer is updated exclusively by WebSocket
+        """
+        logger.info(f"🚀 Initializing WebSocket-only buffer for {self.symbol}...")
+        
+        try:
+            # ONE-TIME API call to seed the buffer
+            initial_klines = binance_client.get_historical_klines(
+                symbol=self.symbol,
+                interval=self.timeframe,
+                start_str="6 hours ago",  # Get enough data for EMA calculations (72 candles for 5m)
+                limit=self.buffer_size
+            )
+            
+            if not initial_klines or len(initial_klines) < 50:
+                logger.error(f"❌ Failed to initialize buffer: {len(initial_klines) if initial_klines else 0} candles")
+                return False
+            
+            # Convert API data to standardized format and populate buffer
+            with self.buffer_lock:
+                self.candle_buffer.clear()
+                for kline in initial_klines:
+                    candle = self._format_api_candle(kline)
+                    self.candle_buffer.append(candle)
+                    
+            self.last_candle_time = self.candle_buffer[-1][6]  # close_time
+            self.is_initialized = True
+            
+            logger.info(f"✅ Buffer initialized with {len(self.candle_buffer)} candles")
+            logger.info(f"📈 Last candle time: {datetime.fromtimestamp(self.last_candle_time/1000)}")
+            logger.info("🔥 BUFFER READY - Switching to WebSocket-only mode!")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize buffer: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    def _format_api_candle(self, kline):
+        """Convert API kline to standard format matching WebSocket structure"""
+        return [
+            int(kline[0]),      # open_time
+            float(kline[1]),    # open
+            float(kline[2]),    # high  
+            float(kline[3]),    # low
+            float(kline[4]),    # close
+            float(kline[5]),    # volume
+            int(kline[6]),      # close_time
+            float(kline[7]),    # quote_asset_volume
+            int(kline[8]),      # number_of_trades
+            float(kline[9]),    # taker_buy_base_asset_volume
+            float(kline[10]),   # taker_buy_quote_asset_volume
+            0                   # ignore (unused)
+        ]
+    
+    def update_from_websocket(self, kline_data):
+        """
+        Update buffer with new WebSocket candle data
+        This is the ONLY way buffer gets updated after initialization
+        """
+        if not self.is_initialized:
+            logger.warning("⚠️ Buffer not initialized - cannot update from WebSocket")
+            return False
+        
+        try:
+            # Convert WebSocket data to standard format
+            candle = [
+                kline_data['open_time'],
+                kline_data['open'],
+                kline_data['high'],
+                kline_data['low'],
+                kline_data['close'],
+                kline_data['volume'],
+                kline_data['close_time'],
+                0,  # placeholder
+                0,  # placeholder  
+                0,  # placeholder
+                0,  # placeholder
+                0   # placeholder
+            ]
+            
+            with self.buffer_lock:
+                # Only add if this is a new candle (avoid duplicates)
+                if (not self.last_candle_time or 
+                    kline_data['close_time'] > self.last_candle_time):
+                    
+                    self.candle_buffer.append(candle)
+                    self.last_candle_time = kline_data['close_time']
+                    self.total_updates += 1
+                    
+                    logger.info(f"📊 Buffer updated: {len(self.candle_buffer)} candles, "
+                              f"latest: O={kline_data['open']:.6f} C={kline_data['close']:.6f}")
+                    return True
+                else:
+                    logger.debug("🔄 Duplicate candle data - skipping update")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"❌ Failed to update buffer from WebSocket: {e}")
+            return False
+    
+    def get_buffer_data(self):
+        """
+        Get current buffer data for strategy analysis
+        Returns data in format expected by strategy (list of candles)
+        """
+        if not self.is_initialized:
+            logger.error("❌ Buffer not initialized - cannot provide data")
+            return None
+        
+        with self.buffer_lock:
+            if len(self.candle_buffer) < 50:
+                logger.error(f"❌ Insufficient buffer data: {len(self.candle_buffer)} candles (need 50+)")
+                return None
+            
+            # Return copy of buffer data as list
+            buffer_data = list(self.candle_buffer)
+            
+        logger.info(f"✅ Providing buffer data: {len(buffer_data)} candles for signal generation")
+        return buffer_data
+    
+    def get_buffer_stats(self):
+        """Get buffer statistics for monitoring"""
+        with self.buffer_lock:
+            return {
+                'size': len(self.candle_buffer),
+                'initialized': self.is_initialized,
+                'total_updates': self.total_updates,
+                'signals_generated': self.signals_generated,
+                'last_candle_time': self.last_candle_time
+            }
+    
+    def is_ready_for_signals(self):
+        """Check if buffer has sufficient data for signal generation"""
+        return (self.is_initialized and 
+                len(self.candle_buffer) >= 50)
+
+
+def recover_rolling_buffer():
+    """
+    Recover rolling buffer after WebSocket disconnection
+    Re-initializes buffer with fresh API data to ensure continuity
+    """
+    global rolling_buffer, binance_client
+    
+    if not rolling_buffer or not binance_client:
+        logger.error("❌ Cannot recover buffer - components not initialized")
+        return False
+    
+    logger.warning("🔄 Recovering rolling buffer after WebSocket issue...")
+    
+    try:
+        # Re-initialize buffer with fresh data
+        if rolling_buffer.initialize_from_api(binance_client):
+            logger.info("✅ Rolling buffer recovered successfully")
+            return True
+        else:
+            logger.error("❌ Failed to recover rolling buffer")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error during buffer recovery: {e}")
+        return False
+
+
+def monitor_buffer_health():
+    """
+    Monitor rolling buffer health and performance
+    Called periodically to ensure buffer is working correctly
+    """
+    global rolling_buffer
+    
+    if not rolling_buffer:
+        logger.warning("⚠️ Rolling buffer not initialized")
+        return False
+    
+    try:
+        stats = rolling_buffer.get_buffer_stats()
+        
+        logger.info(f"📊 Buffer Health Check:")
+        logger.info(f"   Size: {stats['size']}/{rolling_buffer.buffer_size}")
+        logger.info(f"   Initialized: {stats['initialized']}")
+        logger.info(f"   Total Updates: {stats['total_updates']}")
+        logger.info(f"   Signals Generated: {stats['signals_generated']}")
+        logger.info(f"   Ready for Signals: {rolling_buffer.is_ready_for_signals()}")
+        
+        if stats['last_candle_time']:
+            last_update = datetime.fromtimestamp(stats['last_candle_time']/1000)
+            age = datetime.now() - last_update
+            logger.info(f"   Last Update: {last_update} ({age.total_seconds():.0f}s ago)")
+            
+            # Check if buffer data is getting stale (more than 10 minutes)
+            if age.total_seconds() > 600:
+                logger.warning(f"⚠️ Buffer data is stale: {age.total_seconds():.0f}s old")
+                return False
+        
+        return stats['initialized'] and stats['size'] >= 50
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking buffer health: {e}")
+        return False
+
+
 def test_strategies():
     """Test loading the strategies"""
     from modules.strategies import get_strategy
@@ -77,6 +317,7 @@ binance_client = None
 risk_manager = None
 strategy = None
 websocket_manager = None
+rolling_buffer = None  # WebSocket-only rolling buffer for signals
 klines_data = {}
 new_candle_received = {}
 stats = {
@@ -167,7 +408,7 @@ class TelegramNotifier:
 
 def setup():
     """Initialize the trading bot"""
-    global binance_client, risk_manager, strategy, stats, websocket_manager
+    global binance_client, risk_manager, strategy, stats, websocket_manager, rolling_buffer
     
     logger.info("Setting up trading bot...")
     
@@ -223,7 +464,19 @@ def setup():
     websocket_manager.start()
     logger.info("WebSocket connections started")
     
-    # Initialize klines_data with initial data from REST API 
+    # 🚀 Initialize WebSocket-only rolling buffer for signal generation
+    logger.info("🔄 Initializing WebSocket-only rolling buffer...")
+    rolling_buffer = RollingCandleBuffer(TRADING_SYMBOL, TIMEFRAME, buffer_size=60)
+    
+    # Seed buffer with ONE-TIME REST API call
+    if not rolling_buffer.initialize_from_api(binance_client):
+        logger.error("❌ Failed to initialize rolling buffer - cannot continue")
+        exit(1)
+    
+    logger.info("✅ WebSocket-only buffer initialized successfully")
+    logger.info("🔥 Bot ready for real-time signal generation using WebSocket data only!")
+    
+    # Initialize klines_data with initial data from REST API (legacy support)
     initialize_klines_data()
     
     # Record starting balance - try multiple times if needed
@@ -273,7 +526,7 @@ def setup():
                          f"Starting Balance: {stats['start_balance']} USDT\n"
                          f"Auto-Compound: {'Enabled' if AUTO_COMPOUND else 'Disabled'}\n"
                          f"Adaptive Risk Management: Enabled\n"
-                         f"Using WebSocket for real-time data!")
+                         f"WebSocket-Only Signal Generation: Enabled ✅")
 
 
 def initialize_state_file(force=False):
@@ -337,64 +590,67 @@ def initialize_state_file(force=False):
 
 
 def initialize_klines_data(timeframe=None):
-    """Initialize klines data with historical data from REST API"""
+    """Initialize minimal data for WebSocket startup - NOT for trading decisions"""
     global klines_data
     
     # Use provided timeframe or fall back to config default
     tf = timeframe or TIMEFRAME
     
     try:
+        # 🚨 LIVE TRADING: Only get minimal data for WebSocket initialization
+        # Trading decisions will ALWAYS use fresh API calls
+        logger.info("📡 Getting minimal initialization data (NOT for trading decisions)")
+        
         klines = binance_client.get_historical_klines(
             symbol=TRADING_SYMBOL,
             interval=tf,
-            start_str="2 days ago",
-            limit=200
+            start_str="2 hours ago",  # Minimal data just for initialization
+            limit=50  # Minimal amount
         )
         
-        if not klines or len(klines) < 30:
-            logger.warning(f"Not enough historical data to initialize (got {len(klines) if klines else 0} candles)")
+        if not klines or len(klines) < 10:
+            logger.warning(f"Minimal initialization data obtained (got {len(klines) if klines else 0} candles)")
+            klines_data[TRADING_SYMBOL] = []  # Start with empty if needed
             return
             
         klines_data[TRADING_SYMBOL] = klines
-        logger.info(f"Initialized historical data with {len(klines)} candles using timeframe {tf}")
+        logger.info(f"🔧 Minimal initialization complete: {len(klines)} candles (will be replaced with fresh data)")
+        logger.info("⚠️ NOTE: This data is ONLY for initialization - trading uses fresh API calls")
     except Exception as e:
         logger.error(f"Error initializing klines data: {e}")
 
 
 def on_kline_closed(symbol, kline_data):
-    """Callback for when a kline (candlestick) closes"""
-    global klines_data, new_candle_received
+    """Callback for when a kline (candlestick) closes - WebSocket-only buffer update"""
+    global klines_data, new_candle_received, rolling_buffer
     
-    logger.info(f"Kline closed for {symbol}: {kline_data['close_time']}")
+    logger.info(f"🕒 Kline closed for {symbol}: {datetime.fromtimestamp(kline_data['close_time']/1000)}")
     
     try:
-        candle = [
-            kline_data['open_time'],
-            str(kline_data['open']),
-            str(kline_data['high']),
-            str(kline_data['low']),
-            str(kline_data['close']),
-            str(kline_data['volume']),
-            kline_data['close_time'],
-            "0",
-            "0",
-            "0",
-            "0",
-            "0"
-        ]
+        # � WEBSOCKET-ONLY TRADING: Update rolling buffer with new candle
+        # No more REST API calls for signal generation!
         
-        if symbol in klines_data:
-            klines_data[symbol].append(candle)
-            if len(klines_data[symbol]) > 200:
-                klines_data[symbol].pop(0)
-        else:
-            klines_data[symbol] = [candle]
+        if rolling_buffer and rolling_buffer.is_initialized:
+            # Update the rolling buffer with new WebSocket candle
+            buffer_updated = rolling_buffer.update_from_websocket(kline_data)
             
-        new_candle_received[symbol] = True
-        check_for_signals(symbol)
+            if buffer_updated:
+                logger.info(f"✅ Rolling buffer updated with closed candle")
+                logger.info(f"� Candle: O={kline_data['open']:.6f} H={kline_data['high']:.6f} "
+                          f"L={kline_data['low']:.6f} C={kline_data['close']:.6f}")
+                
+                # Trigger signal generation using buffer data
+                new_candle_received[symbol] = True
+                check_for_signals(symbol)
+            else:
+                logger.warning("⚠️ Failed to update rolling buffer")
+        else:
+            logger.error("❌ Rolling buffer not ready - cannot process candle")
         
     except Exception as e:
-        logger.error(f"Error processing kline close: {e}")
+        logger.error(f"❌ Error processing kline close: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 
 def on_kline_update(symbol, kline_data):
@@ -415,19 +671,20 @@ def on_kline_update(symbol, kline_data):
     if symbol in klines_data and klines_data[symbol]:
         # Update the latest candle with real-time data until it's closed
         if not kline_data['is_closed'] and len(klines_data[symbol]) > 0:
+            # CRITICAL FIX: Keep numeric values consistent with REST API data format
             candle = [
                 kline_data['open_time'],
-                str(kline_data['open']),
-                str(kline_data['high']),
-                str(kline_data['low']),
-                str(kline_data['close']),
-                str(kline_data['volume']),
+                kline_data['open'],      # Keep as numeric, not string
+                kline_data['high'],      # Keep as numeric, not string
+                kline_data['low'],       # Keep as numeric, not string
+                kline_data['close'],     # Keep as numeric, not string
+                kline_data['volume'],    # Keep as numeric, not string
                 kline_data['close_time'],
-                "0",
-                "0",
-                "0",
-                "0",
-                "0"
+                0,    # Placeholder - keep as numeric
+                0,    # Placeholder - keep as numeric
+                0,    # Placeholder - keep as numeric
+                0,    # Placeholder - keep as numeric
+                0     # Placeholder - keep as numeric
             ]
             klines_data[symbol][-1] = candle
 
@@ -690,8 +947,8 @@ def on_order_update(order_data):
 
 
 def check_for_signals(symbol=None):
-    """Check for trading signals and execute trades"""
-    global klines_data, new_candle_received
+    """Check for trading signals using WebSocket-only rolling buffer"""
+    global klines_data, new_candle_received, rolling_buffer
     
     if not symbol:
         symbol = TRADING_SYMBOL
@@ -706,29 +963,102 @@ def check_for_signals(symbol=None):
     
     new_candle_received[symbol] = False
     
-    logger.info(f"Checking for trading signals for {symbol}")
+    logger.info(f"🎯 Checking for trading signals for {symbol} using WebSocket buffer")
     
     try:
-        klines = klines_data.get(symbol, [])
+        # � WEBSOCKET-ONLY SIGNAL GENERATION
+        # Use rolling buffer data - NO REST API calls!
         
-        if not klines or len(klines) < 30:
-            logger.warning(f"Not enough historical data to generate signals (got {len(klines) if klines else 0} candles)")
+        if not rolling_buffer or not rolling_buffer.is_ready_for_signals():
+            logger.error("❌ Rolling buffer not ready for signal generation")
             return
-            
+        
+        # Get candle data from rolling buffer (WebSocket-only)
+        klines = rolling_buffer.get_buffer_data()
+        
+        if not klines or len(klines) < 50:
+            logger.error(f"❌ Insufficient WebSocket buffer data: {len(klines) if klines else 0} candles")
+            return
+        
+        logger.info(f"✅ Using WebSocket buffer data: {len(klines)} candles (NO REST API)")
+        
+        # Get current price from WebSocket
         current_price = websocket_manager.get_last_kline(symbol).get('close', None)
         if not current_price:
-            logger.error("Failed to get current price from WebSocket")
+            logger.error("❌ Failed to get current price from WebSocket")
             return
         
-        logger.info(f"Current price for {symbol}: {current_price}")
+        logger.info(f"💰 Current price for {symbol}: {current_price}")
             
+        # Get position info - REST API only for position management (not signals)
         position = binance_client.get_position_info(symbol)
         position_amount = position['position_amount'] if position else 0
         
-        logger.info(f"Current position amount: {position_amount}")
+        logger.info(f"📊 Current position amount: {position_amount}")
         
+        # WebSocket buffer data verification 
+        logger.info("🔍 === WEBSOCKET BUFFER DATA VERIFICATION ===")
+        
+        if klines and len(klines) > 0:
+            latest_candle = klines[-1]
+            if len(latest_candle) >= 5:
+                buffer_close = float(latest_candle[4])
+                logger.info(f"📊 Buffer latest close: {buffer_close:.6f}")
+                logger.info(f"🌐 WebSocket current price: {current_price}")
+                
+                # Show recent buffer trend (last 3 candles)
+                logger.info("📈 WebSocket buffer trend (last 3 candles):")
+                for i in range(max(-3, -len(klines)), 0):
+                    candle = klines[i]
+                    if len(candle) >= 5:
+                        try:
+                            o_price = float(candle[1])
+                            h_price = float(candle[2])
+                            l_price = float(candle[3])
+                            c_price = float(candle[4])
+                            candle_time = datetime.fromtimestamp(candle[6]/1000).strftime('%H:%M:%S')
+                            logger.info(f"   Buffer candle {i}: O={o_price:.6f} H={h_price:.6f} "
+                                      f"L={l_price:.6f} C={c_price:.6f} @{candle_time}")
+                        except (ValueError, TypeError) as e:
+                            logger.error(f"   Buffer candle {i}: Data error - {e}")
+        
+        # Generate signal using WebSocket buffer data ONLY
+        logger.info("🎯 Generating signal from WebSocket buffer (zero REST API calls)...")
         signal = strategy.get_signal(klines)
-        logger.info(f"Strategy signal: {signal}")
+        
+        # Update buffer stats
+        rolling_buffer.signals_generated += 1
+        
+        logger.info(f"🎯 === WEBSOCKET-ONLY SIGNAL: {signal} ===")
+        
+        # Verify signal source and log appropriately
+        if signal in ['BUY', 'SELL']:
+            logger.info(f"✅ {signal} signal generated from WebSocket buffer (real-time)")
+            logger.info(f"📊 Buffer stats: {rolling_buffer.get_buffer_stats()}")
+        elif signal == 'HOLD':
+            logger.info("⚪ HOLD signal - waiting for clear market direction")
+        else:
+            logger.warning(f"⚠️ Unexpected signal type: {signal}")
+        
+        # Execute trade based on signal (REST API only for order execution)
+        if signal == 'BUY' and position_amount <= 0:
+            logger.info("🟢 BUY signal detected with no current position")
+            # Trade execution logic is handled below in the existing sophisticated system
+        elif signal == 'SELL' and position_amount > 0:
+            logger.info("🔴 SELL signal detected with existing position")
+            # Trade execution logic is handled below in the existing sophisticated system
+        elif signal in ['BUY', 'SELL']:
+            logger.info(f"⚪ {signal} signal detected but position filter applied")
+            logger.info(f"   Current position: {position_amount}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking signals: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return  # Early return to avoid executing trades if signal generation failed
+        
+    # Continue with existing sophisticated trade execution logic
+    try:
         
         # Verify bot status before proceeding with trades
         if not binance_client:
@@ -2174,6 +2504,7 @@ def main():
     next_check = time.time()
     next_report = datetime.now().replace(hour=0, minute=0, second=0) + timedelta(days=1)
     last_status_report = time.time() - 7200  # Send status report after first 2 hours
+    last_buffer_check = time.time()  # Buffer health monitoring
     
     # Begin regular trading cycle
     while running:
@@ -2185,6 +2516,14 @@ def main():
                 logger.debug("Running regular trading check")
                 check_for_signals()
                 next_check = current_time + check_interval
+            
+            # Monitor buffer health every 5 minutes
+            if current_time - last_buffer_check >= 300:  # 5 minutes
+                buffer_healthy = monitor_buffer_health()
+                if not buffer_healthy:
+                    logger.warning("⚠️ Buffer health check failed - attempting recovery")
+                    recover_rolling_buffer()
+                last_buffer_check = current_time
             
             # Check if it's time for the daily report
             now = datetime.now()

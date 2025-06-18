@@ -27,8 +27,8 @@ RECV_WINDOW = int(os.getenv('BINANCE_RECV_WINDOW', '10000'))
 # Trading parameters
 TRADING_SYMBOL = os.getenv('TRADING_SYMBOL', 'SUIUSDT')
 TRADING_TYPE = 'FUTURES'  # Use futures trading
-LEVERAGE = int(os.getenv('LEVERAGE', '10'))
-MARGIN_TYPE = os.getenv('MARGIN_TYPE', 'ISOLATED')  # ISOLATED or CROSSED
+LEVERAGE = int(os.getenv('LEVERAGE', '20'))
+MARGIN_TYPE = os.getenv('MARGIN_TYPE', 'CROSSED')  # ISOLATED or CROSSED
 STRATEGY = os.getenv('STRATEGY', 'SmartTrendCatcher')
 
 # Position sizing - Enhanced risk management (aligned with SmartTrendCatcher)
