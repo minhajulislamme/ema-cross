@@ -41,36 +41,35 @@ class TradingStrategy:
 
 class SmartTrendCatcher(TradingStrategy):
     """
-    Enhanced EMA Strategy with Every-Candle Signal Generation:
+    EMA Alignment Strategy with Every-Candle Signal Generation:
     
     Core Strategy:
     - Generates signals for every candle based on EMA alignment
-    - Uses 9, 21, and 50 EMA configuration
-    - 50 EMA acts as trend filter for signal quality
-    - No waiting for crossovers - continuous signal generation
+    - Uses only 10 and 50 EMA configuration
+    - No trend filter - pure EMA alignment signals
+    - Continuous signal generation for each candle
     
     Signal Generation (Every Candle):
-    - BUY: 9 EMA > 21 EMA AND price > 50 EMA (bullish alignment)
-    - SELL: 9 EMA < 21 EMA AND price < 50 EMA (bearish alignment)  
-    - HOLD: Mixed signals or sideways market conditions
+    - BUY: 10 EMA > 50 EMA (bullish alignment)
+    - SELL: 10 EMA < 50 EMA (bearish alignment)  
+    - HOLD: No clear alignment or during transitions
     
     Benefits of Every-Candle Signals:
     - Continuous market assessment on every timeframe
     - Immediate signal updates without waiting for crossovers
     - Better position management with real-time signal changes
     - More responsive to market condition changes
-    - Provides clear HOLD signals for risk management
+    - Simplified logic with just EMA alignment
     """
     
     def __init__(self, 
-                 ema_slow=21,               # Slow EMA (21 period)
-                 ema_fast=9,                # Fast EMA (9 period)
-                 ema_trend=50):             # Trend EMA (50 period)
+                 ema_slow=50,               # Slow EMA (50 period)
+                 ema_fast=10):              # Fast EMA (10 period)
         
         super().__init__("SmartTrendCatcher")
         
         # Parameter validation
-        if ema_slow <= 0 or ema_fast <= 0 or ema_trend <= 0:
+        if ema_slow <= 0 or ema_fast <= 0:
             raise ValueError("EMA periods must be positive")
         if ema_fast >= ema_slow:
             raise ValueError("Fast EMA must be less than slow EMA")
@@ -78,18 +77,17 @@ class SmartTrendCatcher(TradingStrategy):
         # Store parameters
         self.ema_slow = ema_slow
         self.ema_fast = ema_fast
-        self.ema_trend = ema_trend
         self._warning_count = 0
         
         logger.info(f"{self.name} initialized with:")
-        logger.info(f"  EMA Crossover: {ema_fast}/{ema_slow}")
-        logger.info(f"  Trend Filter EMA: {ema_trend}")
+        logger.info(f"  EMA Alignment: {ema_fast}/{ema_slow}")
+        logger.info(f"  Signal Generation: Every candle based on EMA alignment")
     
     def add_indicators(self, df):
-        """Add EMA indicators for crossover strategy with trend filter"""
+        """Add EMA indicators for alignment strategy with every-candle signals"""
         try:
             # Ensure sufficient data
-            min_required = max(self.ema_slow, self.ema_fast, self.ema_trend) + 5
+            min_required = max(self.ema_slow, self.ema_fast) + 5
             if len(df) < min_required:
                 logger.warning(f"Insufficient data: need {min_required}, got {len(df)}")
                 return df
@@ -110,28 +108,18 @@ class SmartTrendCatcher(TradingStrategy):
             # Calculate EMA indicators
             df['ema_slow'] = ta.trend.ema_indicator(df['close'], window=self.ema_slow)
             df['ema_fast'] = ta.trend.ema_indicator(df['close'], window=self.ema_fast)
-            df['ema_trend'] = ta.trend.ema_indicator(df['close'], window=self.ema_trend)
             
             # Handle NaN values
             df['ema_slow'] = df['ema_slow'].interpolate(method='linear').bfill()
             df['ema_fast'] = df['ema_fast'].interpolate(method='linear').bfill()
-            df['ema_trend'] = df['ema_trend'].interpolate(method='linear').bfill()
-            
-            # EMA crossover signals (for reference)
-            df['ema_bullish_cross'] = (df['ema_fast'] > df['ema_slow']) & (df['ema_fast'].shift(1) <= df['ema_slow'].shift(1))
-            df['ema_bearish_cross'] = (df['ema_fast'] < df['ema_slow']) & (df['ema_fast'].shift(1) >= df['ema_slow'].shift(1))
-            
-            # Trend filter conditions (using 50 EMA)
-            df['bullish_trend'] = df['close'] > df['ema_trend']
-            df['bearish_trend'] = df['close'] < df['ema_trend']
             
             # EMA alignment conditions for every candle signal
             df['fast_above_slow'] = df['ema_fast'] > df['ema_slow']
             df['fast_below_slow'] = df['ema_fast'] < df['ema_slow']
             
             # Generate signals for every candle based on EMA alignment
-            df['buy_signal'] = df['fast_above_slow'] & df['bullish_trend']
-            df['sell_signal'] = df['fast_below_slow'] & df['bearish_trend']
+            df['buy_signal'] = df['fast_above_slow']
+            df['sell_signal'] = df['fast_below_slow']
             df['hold_signal'] = ~(df['buy_signal'] | df['sell_signal'])
             
             return df
@@ -141,13 +129,13 @@ class SmartTrendCatcher(TradingStrategy):
             return df
     
     def get_signal(self, klines):
-        """Generate EMA crossover signals with trend filter"""
+        """Generate EMA alignment signals for every candle"""
         try:
-            min_required = max(self.ema_slow, self.ema_fast, self.ema_trend) + 5
+            min_required = max(self.ema_slow, self.ema_fast) + 5
             if not klines or len(klines) < min_required:
                 # Show warning every 10th time to reduce log spam
                 if self._warning_count % 10 == 0:
-                    logger.warning(f"Insufficient data for EMA crossover signal (need {min_required}, have {len(klines) if klines else 0})")
+                    logger.warning(f"Insufficient data for EMA alignment signal (need {min_required}, have {len(klines) if klines else 0})")
                 self._warning_count += 1
                 return None
             
@@ -182,7 +170,7 @@ class SmartTrendCatcher(TradingStrategy):
             latest = df.iloc[-1]
             
             # Validate required columns
-            required_columns = ['buy_signal', 'sell_signal', 'hold_signal', 'ema_fast', 'ema_slow', 'ema_trend', 'bullish_trend', 'bearish_trend']
+            required_columns = ['buy_signal', 'sell_signal', 'hold_signal', 'ema_fast', 'ema_slow']
             
             for col in required_columns:
                 if col not in df.columns or pd.isna(latest[col]):
@@ -192,34 +180,31 @@ class SmartTrendCatcher(TradingStrategy):
             # Generate signal for every candle based on current EMA alignment
             signal = None
             
-            # BUY Signal: Fast EMA above Slow EMA + bullish trend (price above 50 EMA)
+            # BUY Signal: Fast EMA above Slow EMA (bullish alignment)
             if latest['buy_signal']:
                 signal = 'BUY'
-                logger.info(f"🟢 BUY Signal - EMA Alignment + Trend Filter")
-                logger.info(f"   Fast EMA (9): {latest['ema_fast']:.6f} > Slow EMA (21): {latest['ema_slow']:.6f}")
-                logger.info(f"   Trend EMA (50): {latest['ema_trend']:.6f}, Price: {latest['close']:.6f}")
-                logger.info(f"   Bullish Trend: {latest['bullish_trend']}")
+                logger.info(f"🟢 BUY Signal - EMA Bullish Alignment")
+                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f} > Slow EMA (50): {latest['ema_slow']:.6f}")
+                logger.info(f"   Current Price: {latest['close']:.6f}")
             
-            # SELL Signal: Fast EMA below Slow EMA + bearish trend (price below 50 EMA)
+            # SELL Signal: Fast EMA below Slow EMA (bearish alignment)
             elif latest['sell_signal']:
                 signal = 'SELL'
-                logger.info(f"🔴 SELL Signal - EMA Alignment + Trend Filter")
-                logger.info(f"   Fast EMA (9): {latest['ema_fast']:.6f} < Slow EMA (21): {latest['ema_slow']:.6f}")
-                logger.info(f"   Trend EMA (50): {latest['ema_trend']:.6f}, Price: {latest['close']:.6f}")
-                logger.info(f"   Bearish Trend: {latest['bearish_trend']}")
+                logger.info(f"🔴 SELL Signal - EMA Bearish Alignment")
+                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f} < Slow EMA (50): {latest['ema_slow']:.6f}")
+                logger.info(f"   Current Price: {latest['close']:.6f}")
             
-            # HOLD Signal: Mixed signals or sideways market
+            # HOLD Signal: No clear alignment
             else:
                 signal = 'HOLD'
-                logger.info(f"⚪ HOLD Signal - Mixed EMA Alignment or Sideways Market")
-                logger.info(f"   Fast EMA (9): {latest['ema_fast']:.6f}, Slow EMA (21): {latest['ema_slow']:.6f}")
-                logger.info(f"   Trend EMA (50): {latest['ema_trend']:.6f}, Price: {latest['close']:.6f}")
-                logger.info(f"   Bullish Trend: {latest['bullish_trend']}, Bearish Trend: {latest['bearish_trend']}")
+                logger.info(f"⚪ HOLD Signal - No Clear EMA Alignment")
+                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f}, Slow EMA (50): {latest['ema_slow']:.6f}")
+                logger.info(f"   Current Price: {latest['close']:.6f}")
             
             return signal
             
         except Exception as e:
-            logger.error(f"Error in EMA crossover signal generation: {e}")
+            logger.error(f"Error in EMA alignment signal generation: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return None
@@ -228,18 +213,16 @@ def get_strategy(strategy_name):
     """Factory function to get a strategy by name"""
     # Import EMA config values
     try:
-        from modules.config import FAST_EMA, SLOW_EMA, TREND_EMA
+        from modules.config import FAST_EMA, SLOW_EMA
     except ImportError:
         # Fallback values
-        FAST_EMA = 9
-        SLOW_EMA = 26
-        TREND_EMA = 50
+        FAST_EMA = 10
+        SLOW_EMA = 50
     
     strategies = {
         'SmartTrendCatcher': SmartTrendCatcher(
             ema_slow=SLOW_EMA,
-            ema_fast=FAST_EMA,
-            ema_trend=TREND_EMA
+            ema_fast=FAST_EMA
         ),
     }
     
