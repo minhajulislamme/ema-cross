@@ -177,4 +177,4 @@ python -m compileall modules/
 # Compile everything recursively
 python -m compileall /home/minhajulislam/tradingbot/
 
-python -m compileall .
+python3 -m compileall .

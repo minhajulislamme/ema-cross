@@ -25,7 +25,7 @@ else:
 RECV_WINDOW = int(os.getenv('BINANCE_RECV_WINDOW', '10000'))
 
 # Trading parameters
-TRADING_SYMBOL = os.getenv('TRADING_SYMBOL', 'SUIUSDT')
+TRADING_SYMBOL = os.getenv('TRADING_SYMBOL', 'SOLUSDT')
 TRADING_TYPE = 'FUTURES'  # Use futures trading
 LEVERAGE = int(os.getenv('LEVERAGE', '20'))
 MARGIN_TYPE = os.getenv('MARGIN_TYPE', 'CROSSED')  # ISOLATED or CROSSED
@@ -62,7 +62,7 @@ COMPOUND_SCALING_FACTOR = float(os.getenv('COMPOUND_SCALING_FACTOR', '0.5'))  # 
 FAST_EMA = int(os.getenv('FAST_EMA', '10'))    # Fast EMA (10 period)
 SLOW_EMA = int(os.getenv('SLOW_EMA', '50'))    # Slow EMA (50 period)
 
-TIMEFRAME = os.getenv('TIMEFRAME', '15m')
+TIMEFRAME = os.getenv('TIMEFRAME', '5m')
 
 # Risk management - Enhanced stop loss settings
 USE_STOP_LOSS = os.getenv('USE_STOP_LOSS', 'True').lower() == 'true'
