@@ -102,11 +102,26 @@ class RollingCandleBuffer:
         logger.info(f"🚀 Initializing WebSocket-only buffer for {self.symbol}...")
         
         try:
+            # Calculate appropriate time period based on timeframe to get enough candles
+            # Need at least 60 candles for proper EMA calculations
+            timeframe_minutes = {
+                '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+                '1h': 60, '2h': 120, '4h': 240, '6h': 360, '8h': 480,
+                '12h': 720, '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200
+            }
+            
+            minutes_per_candle = timeframe_minutes.get(self.timeframe, 15)  # Default to 15m
+            required_minutes = minutes_per_candle * self.buffer_size  # Get full buffer worth of data
+            required_hours = max(1, required_minutes // 60)  # At least 1 hour
+            
+            start_str = f"{required_hours} hours ago"
+            logger.info(f"📊 Getting {self.buffer_size} candles for {self.timeframe} timeframe ({start_str})")
+            
             # ONE-TIME API call to seed the buffer
             initial_klines = binance_client.get_historical_klines(
                 symbol=self.symbol,
                 interval=self.timeframe,
-                start_str="6 hours ago",  # Get enough data for EMA calculations (72 candles for 5m)
+                start_str=start_str,
                 limit=self.buffer_size
             )
             
@@ -163,14 +178,19 @@ class RollingCandleBuffer:
             return False
         
         try:
+            # Log the incoming kline data for debugging
+            logger.debug(f"🔍 WebSocket kline data: close_time={kline_data.get('close_time')}, "
+                        f"is_closed={kline_data.get('is_closed', 'N/A')}, "
+                        f"last_buffer_time={self.last_candle_time}")
+            
             # Convert WebSocket data to standard format
             candle = [
                 kline_data['open_time'],
-                kline_data['open'],
-                kline_data['high'],
-                kline_data['low'],
-                kline_data['close'],
-                kline_data['volume'],
+                float(kline_data['open']),
+                float(kline_data['high']),
+                float(kline_data['low']),
+                float(kline_data['close']),
+                float(kline_data['volume']),
                 kline_data['close_time'],
                 0,  # placeholder
                 0,  # placeholder  
@@ -180,23 +200,77 @@ class RollingCandleBuffer:
             ]
             
             with self.buffer_lock:
-                # Only add if this is a new candle (avoid duplicates)
-                if (not self.last_candle_time or 
-                    kline_data['close_time'] > self.last_candle_time):
+                current_close_time = kline_data['close_time']
+                
+                # Enhanced logic for determining if this is a new candle
+                # Allow for small time differences and handle initialization edge cases
+                is_new_candle = False
+                
+                if not self.last_candle_time:
+                    # First WebSocket update
+                    logger.info(f"🆕 First WebSocket candle update")
+                    is_new_candle = True
+                elif current_close_time > self.last_candle_time:
+                    # Clearly newer candle
+                    logger.info(f"🆕 New candle detected: {current_close_time} > {self.last_candle_time}")
+                    is_new_candle = True
+                elif current_close_time == self.last_candle_time:
+                    # Same time - could be duplicate or update to same candle
+                    logger.debug(f"🔄 Same candle time - checking if it's an update")
                     
+                    # If we have existing candles, check if this is updating the last one
+                    if len(self.candle_buffer) > 0:
+                        last_candle = self.candle_buffer[-1]
+                        last_buffer_close_time = last_candle[6]  # close_time is at index 6
+                        
+                        if current_close_time == last_buffer_close_time:
+                            # Update the existing candle instead of adding a new one
+                            logger.info(f"🔄 Updating existing candle with same close_time: {current_close_time}")
+                            self.candle_buffer[-1] = candle
+                            self.total_updates += 1
+                            logger.info(f"📊 Buffer updated (same candle): {len(self.candle_buffer)} candles, "
+                                      f"latest: O={kline_data['open']:.6f} C={kline_data['close']:.6f}")
+                            return True
+                        else:
+                            logger.warning(f"⚠️ Time mismatch: WebSocket={current_close_time}, Buffer={last_buffer_close_time}")
+                            is_new_candle = True
+                    else:
+                        # No candles in buffer yet
+                        is_new_candle = True
+                else:
+                    # Current time is older than last time - this should not happen normally
+                    logger.warning(f"⚠️ Received older candle: {current_close_time} < {self.last_candle_time}")
+                    
+                    # But allow it if the time difference is small (within 1 minute)
+                    time_diff = self.last_candle_time - current_close_time
+                    if time_diff < 60000:  # Less than 1 minute in milliseconds
+                        logger.info(f"🔄 Allowing slightly older candle (diff: {time_diff}ms)")
+                        is_new_candle = True
+                    else:
+                        logger.warning(f"� Rejecting significantly older candle (diff: {time_diff}ms)")
+                        return False
+                
+                if is_new_candle:
                     self.candle_buffer.append(candle)
-                    self.last_candle_time = kline_data['close_time']
+                    self.last_candle_time = current_close_time
                     self.total_updates += 1
                     
                     logger.info(f"📊 Buffer updated: {len(self.candle_buffer)} candles, "
-                              f"latest: O={kline_data['open']:.6f} C={kline_data['close']:.6f}")
+                              f"latest: O={kline_data['open']:.6f} C={kline_data['close']:.6f} "
+                              f"at {datetime.fromtimestamp(kline_data['close_time']/1000)}")
                     return True
                 else:
-                    logger.debug("🔄 Duplicate candle data - skipping update")
+                    logger.debug(f"🔄 No buffer update needed")
                     return False
                     
+        except KeyError as e:
+            logger.error(f"❌ Missing key in WebSocket data: {e}. Data: {kline_data}")
+            return False
         except Exception as e:
             logger.error(f"❌ Failed to update buffer from WebSocket: {e}")
+            logger.error(f"📋 WebSocket data: {kline_data}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
     def get_buffer_data(self):
@@ -289,9 +363,19 @@ def monitor_buffer_health():
             age = datetime.now() - last_update
             logger.info(f"   Last Update: {last_update} ({age.total_seconds():.0f}s ago)")
             
-            # Check if buffer data is getting stale (more than 10 minutes)
-            if age.total_seconds() > 600:
-                logger.warning(f"⚠️ Buffer data is stale: {age.total_seconds():.0f}s old")
+            # Check if buffer data is getting stale (more than 10 minutes for higher timeframes)
+            # Adjust staleness threshold based on timeframe
+            timeframe_minutes = {
+                '1m': 2, '3m': 5, '5m': 8, '15m': 20, '30m': 35,
+                '1h': 65, '2h': 125, '4h': 245, '6h': 365, '8h': 485,
+                '12h': 725, '1d': 1445, '3d': 4325, '1w': 10085, '1M': 43205
+            }
+            
+            max_age = timeframe_minutes.get(TIMEFRAME, 20) * 60  # Convert to seconds
+            
+            if age.total_seconds() > max_age:
+                logger.warning(f"⚠️ Buffer data is stale: {age.total_seconds():.0f}s old "
+                              f"(max expected: {max_age}s for {TIMEFRAME})")
                 return False
         
         return stats['initialized'] and stats['size'] >= 50
@@ -601,10 +685,24 @@ def initialize_klines_data(timeframe=None):
         # Trading decisions will ALWAYS use fresh API calls
         logger.info("📡 Getting minimal initialization data (NOT for trading decisions)")
         
+        # Calculate required time based on timeframe to get at least 50 candles
+        timeframe_minutes = {
+            '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+            '1h': 60, '2h': 120, '4h': 240, '6h': 360, '8h': 480,
+            '12h': 720, '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200
+        }
+        
+        minutes_per_candle = timeframe_minutes.get(tf, 15)  # Default to 15m
+        required_minutes = minutes_per_candle * 50  # Get 50 candles worth of data
+        required_hours = max(1, required_minutes // 60)  # At least 1 hour
+        
+        start_str = f"{required_hours} hours ago"
+        logger.info(f"📡 Getting minimal {tf} initialization data from {start_str}")
+        
         klines = binance_client.get_historical_klines(
             symbol=TRADING_SYMBOL,
             interval=tf,
-            start_str="2 hours ago",  # Minimal data just for initialization
+            start_str=start_str,
             limit=50  # Minimal amount
         )
         
@@ -627,30 +725,59 @@ def on_kline_closed(symbol, kline_data):
     logger.info(f"🕒 Kline closed for {symbol}: {datetime.fromtimestamp(kline_data['close_time']/1000)}")
     
     try:
-        # � WEBSOCKET-ONLY TRADING: Update rolling buffer with new candle
+        # Debug: Log the complete kline data structure
+        logger.info(f"🔍 Complete kline data: {kline_data}")
+        logger.info(f"🔍 Kline data keys: {list(kline_data.keys())}")
+        logger.info(f"🔍 Is closed flag: {kline_data.get('is_closed', 'Missing')}")
+        
+        # 🚀 WEBSOCKET-ONLY TRADING: Update rolling buffer with new candle
         # No more REST API calls for signal generation!
         
-        if rolling_buffer and rolling_buffer.is_initialized:
-            # Update the rolling buffer with new WebSocket candle
-            buffer_updated = rolling_buffer.update_from_websocket(kline_data)
+        if not rolling_buffer:
+            logger.error("❌ Rolling buffer is None - cannot process candle")
+            return
             
-            if buffer_updated:
-                logger.info(f"✅ Rolling buffer updated with closed candle")
-                logger.info(f"� Candle: O={kline_data['open']:.6f} H={kline_data['high']:.6f} "
-                          f"L={kline_data['low']:.6f} C={kline_data['close']:.6f}")
-                
-                # Trigger signal generation using buffer data
-                new_candle_received[symbol] = True
-                check_for_signals(symbol)
-            else:
-                logger.warning("⚠️ Failed to update rolling buffer")
-        else:
-            logger.error("❌ Rolling buffer not ready - cannot process candle")
+        if not rolling_buffer.is_initialized:
+            logger.error("❌ Rolling buffer not initialized - cannot process candle")
+            return
         
+        # Update the rolling buffer with new WebSocket candle
+        logger.info(f"🔄 Attempting to update rolling buffer with closed candle...")
+        buffer_updated = rolling_buffer.update_from_websocket(kline_data)
+        
+        if buffer_updated:
+            logger.info(f"✅ Rolling buffer updated with closed candle")
+            logger.info(f"📊 Candle: O={kline_data['open']:.6f} H={kline_data['high']:.6f} "
+                      f"L={kline_data['low']:.6f} C={kline_data['close']:.6f}")
+            
+            # Trigger signal generation using buffer data
+            new_candle_received[symbol] = True
+            check_for_signals(symbol)
+        else:
+            logger.warning("⚠️ Failed to update rolling buffer")
+            
+            # Additional debugging - check buffer state
+            if rolling_buffer:
+                stats = rolling_buffer.get_buffer_stats()
+                logger.info(f"🔍 Buffer stats: {stats}")
+                
+                # Check what the last candle time comparison looks like
+                logger.info(f"🔍 Buffer last_candle_time: {rolling_buffer.last_candle_time}")
+                logger.info(f"🔍 Incoming close_time: {kline_data.get('close_time', 'Missing')}")
+                
+                # Try to recover if buffer seems corrupted
+                if stats['size'] == 0:
+                    logger.warning("🔧 Buffer is empty - attempting recovery...")
+                    recover_rolling_buffer()
+    
     except Exception as e:
         logger.error(f"❌ Error processing kline close: {e}")
         import traceback
         logger.error(traceback.format_exc())
+        
+        # Try to recover buffer on any error
+        logger.warning("🔧 Attempting buffer recovery due to error...")
+        recover_rolling_buffer()
 
 
 def on_kline_update(symbol, kline_data):
@@ -1619,6 +1746,7 @@ def send_status_report():
 def handle_exit(signal, frame):
     """Handle exit gracefully"""
     global running, websocket_manager
+
     logger.info("Shutdown signal received. Cleaning up...")
     running = False
     
@@ -2337,6 +2465,53 @@ def round_quantity(quantity, symbol):
     except Exception as e:
         logger.warning(f"Error rounding quantity: {e}")
         return quantity  # Return original quantity on error
+
+def debug_buffer_state():
+    """Debug function to check current buffer and WebSocket state"""
+    global rolling_buffer, websocket_manager
+    
+    logger.info("🔍 === DEBUG BUFFER STATE ===")
+    
+    # Check rolling buffer
+    if rolling_buffer:
+        try:
+            stats = rolling_buffer.get_buffer_stats()
+            logger.info(f"📊 Buffer Stats: {stats}")
+            
+            # Check if buffer has data
+            if hasattr(rolling_buffer, 'candle_buffer') and rolling_buffer.candle_buffer:
+                latest_candle = list(rolling_buffer.candle_buffer)[-1] if rolling_buffer.candle_buffer else None
+                if latest_candle and len(latest_candle) >= 7:
+                    latest_time = datetime.fromtimestamp(latest_candle[6]/1000)
+                    logger.info(f"📈 Latest Buffer Candle: time={latest_time}, close={latest_candle[4]}")
+                else:
+                    logger.warning("⚠️ Buffer has no valid candles")
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking buffer: {e}")
+    else:
+        logger.error("❌ Rolling buffer is None")
+    
+    # Check WebSocket state
+    if websocket_manager:
+        try:
+            is_connected = websocket_manager.is_connected()
+            logger.info(f"🌐 WebSocket Connected: {is_connected}")
+            
+            # Check last kline data
+            if hasattr(websocket_manager, 'last_kline_data'):
+                last_kline = websocket_manager.last_kline_data.get(TRADING_SYMBOL, {})
+                if last_kline:
+                    last_time = datetime.fromtimestamp(last_kline.get('close_time', 0)/1000)
+                    logger.info(f"📊 Last WebSocket Kline: time={last_time}, close={last_kline.get('close', 'N/A')}")
+                else:
+                    logger.warning("⚠️ No WebSocket kline data for symbol")
+        except Exception as e:
+            logger.error(f"❌ Error checking WebSocket: {e}")
+    else:
+        logger.error("❌ WebSocket manager is None")
+    
+    logger.info("🔍 === END DEBUG ===")
 
 def main():
     """Main function to start the trading bot"""
