@@ -45,13 +45,13 @@ class SmartTrendCatcher(TradingStrategy):
     
     Core Strategy:
     - Generates signals for every candle based on EMA alignment
-    - Uses only 10 and 50 EMA configuration
+    - Uses 10 and 30 EMA configuration
     - No trend filter - pure EMA alignment signals
     - Continuous signal generation for each candle
     
     Signal Generation (Every Candle):
-    - BUY: 10 EMA > 50 EMA (bullish alignment)
-    - SELL: 10 EMA < 50 EMA (bearish alignment)  
+    - BUY: 10 EMA > 30 EMA (bullish alignment)
+    - SELL: 10 EMA < 30 EMA (bearish alignment)  
     - HOLD: No clear alignment or during transitions
     
     Benefits of Every-Candle Signals:
@@ -63,7 +63,7 @@ class SmartTrendCatcher(TradingStrategy):
     """
     
     def __init__(self, 
-                 ema_slow=50,               # Slow EMA (50 period)
+                 ema_slow=30,               # Slow EMA (30 period)
                  ema_fast=10):              # Fast EMA (10 period)
         
         super().__init__("SmartTrendCatcher")
@@ -184,21 +184,21 @@ class SmartTrendCatcher(TradingStrategy):
             if latest['buy_signal']:
                 signal = 'BUY'
                 logger.info(f"🟢 BUY Signal - EMA Bullish Alignment")
-                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f} > Slow EMA (50): {latest['ema_slow']:.6f}")
+                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f} > Slow EMA (30): {latest['ema_slow']:.6f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             # SELL Signal: Fast EMA below Slow EMA (bearish alignment)
             elif latest['sell_signal']:
                 signal = 'SELL'
                 logger.info(f"🔴 SELL Signal - EMA Bearish Alignment")
-                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f} < Slow EMA (50): {latest['ema_slow']:.6f}")
+                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f} < Slow EMA (30): {latest['ema_slow']:.6f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             # HOLD Signal: No clear alignment
             else:
                 signal = 'HOLD'
                 logger.info(f"⚪ HOLD Signal - No Clear EMA Alignment")
-                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f}, Slow EMA (50): {latest['ema_slow']:.6f}")
+                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f}, Slow EMA (30): {latest['ema_slow']:.6f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             return signal
@@ -217,7 +217,7 @@ def get_strategy(strategy_name):
     except ImportError:
         # Fallback values
         FAST_EMA = 10
-        SLOW_EMA = 50
+        SLOW_EMA = 30
     
     strategies = {
         'SmartTrendCatcher': SmartTrendCatcher(

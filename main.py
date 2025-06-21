@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+"""
+Trading Bot with Enhanced Deduplication
+
+Recent improvements to prevent duplicate processing:
+1. Order update deduplication - prevents duplicate order logs and processing
+2. Account update throttling - prevents spam from duplicate balance updates  
+3. Price update throttling - limits kline update logs to every 5 seconds
+4. Chart generation throttling - prevents excessive chart creation
+5. Telegram notification deduplication - prevents duplicate messages
+
+These changes eliminate the duplicate logging and processing issues while
+maintaining full functionality and real-time responsiveness.
+"""
+
 import os
 import logging
 import time
@@ -782,16 +796,28 @@ def on_kline_closed(symbol, kline_data):
 
 def on_kline_update(symbol, kline_data):
     """Callback for real-time kline updates (includes unclosed candles)"""
-    # Format for easy reading - real-time price updates with colored output
-    price = kline_data['close']
-    formatted_time = datetime.fromtimestamp(kline_data['close_time']/1000).strftime('%H:%M:%S')
+    # Add throttling to reduce log spam
+    if not hasattr(on_kline_update, 'last_log_time'):
+        on_kline_update.last_log_time = {}
     
-    # Calculate price change percentage from open
-    price_change = ((kline_data['close'] - kline_data['open']) / kline_data['open']) * 100
-    direction = "▲" if price_change >= 0 else "▼"
+    current_time = time.time()
     
-    # Log real-time price updates
-    logger.info(f"📊 {symbol} | Price: {price:.2f} | {direction} {abs(price_change):.2f}% | O: {kline_data['open']:.2f} H: {kline_data['high']:.2f} L: {kline_data['low']:.2f} | Vol: {kline_data['volume']:.2f} | {formatted_time}")
+    # Only log price updates every 5 seconds to reduce spam
+    if symbol not in on_kline_update.last_log_time or \
+       current_time - on_kline_update.last_log_time[symbol] >= 5:
+        
+        # Format for easy reading - real-time price updates with colored output
+        price = kline_data['close']
+        formatted_time = datetime.fromtimestamp(kline_data['close_time']/1000).strftime('%H:%M:%S')
+        
+        # Calculate price change percentage from open
+        price_change = ((kline_data['close'] - kline_data['open']) / kline_data['open']) * 100
+        direction = "▲" if price_change >= 0 else "▼"
+        
+        # Log real-time price updates (throttled)
+        logger.info(f"📊 {symbol} | Price: {price:.2f} | {direction} {abs(price_change):.2f}% | O: {kline_data['open']:.2f} H: {kline_data['high']:.2f} L: {kline_data['low']:.2f} | Vol: {kline_data['volume']:.2f} | {formatted_time}")
+        
+        on_kline_update.last_log_time[symbol] = current_time
     
     # Store data for later use
     global klines_data
@@ -870,28 +896,45 @@ def on_account_update(balance_updates, position_updates):
     """Callback for account updates"""
     global stats
     
+    # Add deduplication to prevent duplicate processing
+    if not hasattr(on_account_update, 'last_update'):
+        on_account_update.last_update = {'balance': 0, 'time': 0}
+    
+    current_time = time.time()
+    
     logger.info(f"Account update received: {len(balance_updates)} balances, {len(position_updates)} positions")
     
     try:
         if 'USDT' in balance_updates:
             new_balance = balance_updates['USDT']
             
-            if 'current_balance' in stats and stats['current_balance'] > 0:
-                balance_change = new_balance - stats['current_balance']
-                # Only add to daily profit if we're processing a realized profit/loss from a trade
-                # This helps avoid counting deposits/withdrawals as profit/loss
-                if len(position_updates) > 0:
-                    stats['daily_profit'] += balance_change
-                    logger.info(f"Balance change from trade: {balance_change:.6f} USDT, Daily P/L: {stats['daily_profit']:.6f} USDT")
-                else:
-                    logger.info(f"Balance change (non-trade): {balance_change:.6f} USDT")
+            # Only process if balance actually changed or it's been more than 5 seconds
+            balance_changed = abs(new_balance - on_account_update.last_update['balance']) > 0.000001
+            time_elapsed = current_time - on_account_update.last_update['time'] > 5
             
-            stats['current_balance'] = new_balance
-            logger.info(f"Balance updated: {new_balance:.6f} USDT")
-            
-            # Update risk manager with new balance
-            if risk_manager:
-                risk_manager.update_balance_for_compounding()
+            if balance_changed or time_elapsed:
+                if 'current_balance' in stats and stats['current_balance'] > 0:
+                    balance_change = new_balance - stats['current_balance']
+                    # Only add to daily profit if we're processing a realized profit/loss from a trade
+                    # This helps avoid counting deposits/withdrawals as profit/loss
+                    if len(position_updates) > 0 and balance_changed:
+                        stats['daily_profit'] += balance_change
+                        logger.info(f"Balance change from trade: {balance_change:.6f} USDT, Daily P/L: {stats['daily_profit']:.6f} USDT")
+                    elif balance_changed:
+                        logger.info(f"Balance change (non-trade): {balance_change:.6f} USDT")
+                
+                stats['current_balance'] = new_balance
+                logger.info(f"Balance updated: {new_balance:.6f} USDT")
+                
+                # Update risk manager with new balance
+                if risk_manager:
+                    risk_manager.update_balance_for_compounding()
+                
+                # Update tracking
+                on_account_update.last_update['balance'] = new_balance
+                on_account_update.last_update['time'] = current_time
+            else:
+                logger.debug(f"Skipping duplicate balance update: {new_balance:.6f} USDT")
             
         # Log position updates with more precision
         for symbol, position in position_updates.items():
@@ -910,6 +953,10 @@ def on_order_update(order_data):
     """Callback for order updates"""
     global stats
     
+    # Add order deduplication to prevent duplicate processing
+    if not hasattr(on_order_update, 'processed_orders'):
+        on_order_update.processed_orders = set()
+    
     try:
         symbol = order_data['symbol']
         status = order_data['order_status']
@@ -917,6 +964,25 @@ def on_order_update(order_data):
         order_type = order_data['type']
         filled_qty = order_data['filled_quantity']
         price = order_data['last_filled_price']
+        order_id = order_data.get('order_id', 'unknown')
+        
+        # Create unique order key to prevent duplicate processing
+        order_key = f"{order_id}_{status}_{filled_qty}_{price}"
+        
+        # Skip if we've already processed this exact order update
+        if order_key in on_order_update.processed_orders:
+            logger.debug(f"Skipping duplicate order update: {order_key}")
+            return
+        
+        # Add to processed orders set
+        on_order_update.processed_orders.add(order_key)
+        
+        # Clean up old processed orders to prevent memory buildup (keep last 1000)
+        if len(on_order_update.processed_orders) > 1000:
+            # Remove oldest half
+            old_orders = list(on_order_update.processed_orders)[:500]
+            for old_order in old_orders:
+                on_order_update.processed_orders.discard(old_order)
         
         # Create a more visually informative log message
         if status == 'FILLED':
@@ -924,8 +990,10 @@ def on_order_update(order_data):
             if order_type == 'MARKET':
                 if side == 'BUY':
                     logger.info(f"🟢🟢🟢 EXECUTED {side} ORDER: {filled_qty} {symbol} @ {price} 🟢🟢🟢")
-                else:
+                elif side == 'SELL':
                     logger.info(f"🔴🔴🔴 EXECUTED {side} ORDER: {filled_qty} {symbol} @ {price} 🔴🔴🔴")
+                else:
+                    logger.info(f"⚫⚫⚫ EXECUTED {side} ORDER: {filled_qty} {symbol} @ {price} ⚫⚫⚫")
             elif order_type in ['STOP_MARKET']:
                 logger.info(f"⚠️⚠️⚠️ EXECUTED {order_type} {side} ORDER: {filled_qty} {symbol} @ {price} ⚠️⚠️⚠️")
                 
@@ -997,53 +1065,70 @@ def on_order_update(order_data):
                 except Exception as e:
                     logger.error(f"Failed to get account balance after trade: {e}")
                 
-                # Send detailed notification with trade info and account status
-                notifier = TelegramNotifier()
-            
-                if side == 'BUY':
-                    message = f"🟢 *Position Opened*\n"
-                else:
-                    message = f"🔴 *Position Opened*\n"
+                # Send detailed notification with trade info and account status (with deduplication)
+                # Create notification key to prevent duplicate messages
+                notification_key = f"{order_id}_{status}_{side}_{price}_{realized_profit}"
+                
+                if not hasattr(on_order_update, 'sent_notifications'):
+                    on_order_update.sent_notifications = set()
+                
+                if notification_key not in on_order_update.sent_notifications:
+                    on_order_update.sent_notifications.add(notification_key)
                     
-                # Basic trade info
-                message += f"Symbol: {symbol}\n" \
-                          f"Side: {side}\n" \
-                          f"Quantity: {filled_qty}\n" \
-                          f"Price: {price}\n"
+                    # Clean up old notifications to prevent memory buildup
+                    if len(on_order_update.sent_notifications) > 500:
+                        old_notifications = list(on_order_update.sent_notifications)[:250]
+                        for old_notif in old_notifications:
+                            on_order_update.sent_notifications.discard(old_notif)
+                    
+                    notifier = TelegramNotifier()
                 
-                # Add strategy info
-                message += f"Strategy: {strategy_name}\n"
-                          
-                # Add profit/loss info if applicable
-                if realized_profit > 0:
-                    message += f"Realized Profit: +{realized_profit:.2f} USDT 🎯\n"
-                elif realized_profit < 0:
-                    message += f"Realized Loss: {realized_profit:.2f} USDT 📉\n"
-                
-                # Add current account info
-                message += f"\n*Account Status:*\n" \
-                          f"Current Balance: {current_balance:.2f} USDT\n" \
-                          f"Total Trades: {stats['total_trades']}\n" \
-                          f"Win Rate: {(stats['winning_trades'] / stats['total_trades'] * 100) if stats['total_trades'] > 0 else 0:.1f}%\n"
-                
-                # Add API & WebSocket status
-                ws_status = "Connected" if websocket_manager and websocket_manager.is_connected() else "Disconnected"
-                message += f"\n*Connection Status:*\n" \
-                          f"WebSocket: {ws_status}"
-                
-                notifier.send_message(message)
-                
-                # For significant trades (profit/loss over certain threshold), send a chart
-                try:
-                    significant_threshold = current_balance * 0.02  # 2% of balance
-                    if abs(realized_profit) >= significant_threshold:
-                        # Generate and send a trade chart for significant trades
-                        chart_path = generate_trade_chart(symbol, side, price, realized_profit)
-                        if chart_path:
-                            caption = f"Trade Chart: {symbol} {side} @ {price}"
-                            notifier.send_photo(chart_path, caption)
-                except Exception as chart_error:
-                    logger.error(f"Error generating trade chart: {chart_error}")
+                    if side == 'BUY':
+                        message = f"🟢 *Position Opened*\n"
+                    else:
+                        message = f"🔴 *Position Opened*\n"
+                        
+                    # Basic trade info
+                    message += f"Symbol: {symbol}\n" \
+                              f"Side: {side}\n" \
+                              f"Quantity: {filled_qty}\n" \
+                              f"Price: {price}\n"
+                    
+                    # Add strategy info
+                    message += f"Strategy: {strategy_name}\n"
+                              
+                    # Add profit/loss info if applicable
+                    if realized_profit > 0:
+                        message += f"Realized Profit: +{realized_profit:.2f} USDT 🎯\n"
+                    elif realized_profit < 0:
+                        message += f"Realized Loss: {realized_profit:.2f} USDT 📉\n"
+                    
+                    # Add current account info
+                    message += f"\n*Account Status:*\n" \
+                              f"Current Balance: {current_balance:.2f} USDT\n" \
+                              f"Total Trades: {stats['total_trades']}\n" \
+                              f"Win Rate: {(stats['winning_trades'] / stats['total_trades'] * 100) if stats['total_trades'] > 0 else 0:.1f}%\n"
+                    
+                    # Add API & WebSocket status
+                    ws_status = "Connected" if websocket_manager and websocket_manager.is_connected() else "Disconnected"
+                    message += f"\n*Connection Status:*\n" \
+                              f"WebSocket: {ws_status}"
+                    
+                    notifier.send_message(message)
+                    
+                    # For significant trades (profit/loss over certain threshold), send a chart
+                    try:
+                        significant_threshold = current_balance * 0.02  # 2% of balance
+                        if abs(realized_profit) >= significant_threshold:
+                            # Generate and send a trade chart for significant trades
+                            chart_path = generate_trade_chart(symbol, side, price, realized_profit)
+                            if chart_path:
+                                caption = f"Trade Chart: {symbol} {side} @ {price}"
+                                notifier.send_photo(chart_path, caption)
+                    except Exception as chart_error:
+                        logger.error(f"Error generating trade chart: {chart_error}")
+                else:
+                    logger.debug(f"Skipping duplicate notification for order: {notification_key}")
                     
             elif order_type in ['STOP_MARKET']:
                 # For stop loss orders only (take profit functionality removed)
@@ -1255,6 +1340,9 @@ def check_for_signals(symbol=None):
                     order_id = close_order.get('orderId', 'unknown')
                     logger.info(f"✅ Successfully closed SHORT position with order ID: {order_id}")
                     
+                    # Clear locked trailing stop since position is closed
+                    risk_manager.clear_locked_trailing_stop(symbol)
+                    
                     # Check if position was actually closed (sometimes there can be a delay)
                     time.sleep(1)  # Wait a moment for the order to process
                     position = binance_client.get_position_info(symbol)
@@ -1390,6 +1478,9 @@ def check_for_signals(symbol=None):
                     order_id = close_order.get('orderId', 'unknown')
                     logger.info(f"✅ Successfully closed LONG position with order ID: {order_id}")
                     
+                    # Clear locked trailing stop since position is closed
+                    risk_manager.clear_locked_trailing_stop(symbol)
+                    
                     # Check if position was actually closed (sometimes there can be a delay)
                     time.sleep(1)  # Wait a moment for the order to process
                     position = binance_client.get_position_info(symbol)
@@ -1403,7 +1494,7 @@ def check_for_signals(symbol=None):
                     return
                 
             # Check if we should open a new position - at this point we know we don't have an existing SHORT position
-            logger.info(f"Opening new SHORT position based on SELL signal (current position amount: {position_amount})")
+            logger.info(f"Opening new SHORT position based on SELL signal (current position amount: {position_amount})")  
             if risk_manager.should_open_position(symbol):
                 stop_loss_price = risk_manager.calculate_stop_loss(symbol, "SELL", current_price)
                 
@@ -2374,6 +2465,22 @@ def generate_trade_chart(symbol, side, price, profit_loss=None):
     Returns:
         Path to saved chart image or None if failed
     """
+    # Add throttling to prevent excessive chart generation
+    if not hasattr(generate_trade_chart, 'last_chart_time'):
+        generate_trade_chart.last_chart_time = {}
+    
+    current_time = time.time()
+    chart_key = f"{symbol}_{side}_{price}"
+    
+    # Only generate chart if it's been more than 10 seconds since last chart for this trade
+    if chart_key in generate_trade_chart.last_chart_time:
+        time_since_last = current_time - generate_trade_chart.last_chart_time[chart_key]
+        if time_since_last < 10:
+            logger.debug(f"Skipping chart generation - too soon since last chart ({time_since_last:.1f}s)")
+            return None
+    
+    generate_trade_chart.last_chart_time[chart_key] = current_time
+    
     try:
         # Create charts directory if needed
         charts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'charts')

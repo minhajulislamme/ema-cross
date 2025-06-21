@@ -60,15 +60,15 @@ COMPOUND_SCALING_FACTOR = float(os.getenv('COMPOUND_SCALING_FACTOR', '0.5'))  # 
 
 # EMA parameters (10/50 EMA alignment for every-candle signals)
 FAST_EMA = int(os.getenv('FAST_EMA', '10'))    # Fast EMA (10 period)
-SLOW_EMA = int(os.getenv('SLOW_EMA', '50'))    # Slow EMA (50 period)
+SLOW_EMA = int(os.getenv('SLOW_EMA', '30'))    # Slow EMA (30 period)
 
 TIMEFRAME = os.getenv('TIMEFRAME', '5m')
 
 # Risk management - Enhanced stop loss settings
 USE_STOP_LOSS = os.getenv('USE_STOP_LOSS', 'True').lower() == 'true'
-STOP_LOSS_PCT = float(os.getenv('STOP_LOSS_PCT', '0.02'))  # 2% stop loss (more conservative)
+STOP_LOSS_PCT = float(os.getenv('STOP_LOSS_PCT', '0.015'))  # 1.5% stop loss (more conservative)
 TRAILING_STOP = os.getenv('TRAILING_STOP', 'True').lower() == 'true'
-TRAILING_STOP_PCT = float(os.getenv('TRAILING_STOP_PCT', '0.02'))  # 2% trailing stop
+TRAILING_STOP_PCT = float(os.getenv('TRAILING_STOP_PCT', '0.03'))  # 3% trailing stop
 
 # Enhanced backtesting parameters
 BACKTEST_START_DATE = os.getenv('BACKTEST_START_DATE', '2023-01-01')
