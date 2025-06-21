@@ -56,19 +56,23 @@ COMPOUND_MIN_WIN_RATE = float(os.getenv('COMPOUND_MIN_WIN_RATE', '0.6'))  # Requ
 COMPOUND_MAX_DRAWDOWN = float(os.getenv('COMPOUND_MAX_DRAWDOWN', '0.15'))  # Pause if >15% drawdown
 COMPOUND_SCALING_FACTOR = float(os.getenv('COMPOUND_SCALING_FACTOR', '0.5'))  # Reduce compounding if performance poor
 
-# Technical indicator parameters - EMA Alignment Strategy
+# Technical indicator parameters - EMA Alignment Strategy with ADX Filter
 
-# EMA parameters (10/50 EMA alignment for every-candle signals)
+# EMA parameters (10/30 EMA alignment for every-candle signals)
 FAST_EMA = int(os.getenv('FAST_EMA', '10'))    # Fast EMA (10 period)
 SLOW_EMA = int(os.getenv('SLOW_EMA', '30'))    # Slow EMA (30 period)
+
+# ADX parameters (trend strength filter)
+ADX_PERIOD = int(os.getenv('ADX_PERIOD', '14'))  # ADX period (14 is standard)
+ADX_THRESHOLD = float(os.getenv('ADX_THRESHOLD', '14.0'))  # ADX <= 14 = HOLD (weak trend)
 
 TIMEFRAME = os.getenv('TIMEFRAME', '5m')
 
 # Risk management - Enhanced stop loss settings
 USE_STOP_LOSS = os.getenv('USE_STOP_LOSS', 'True').lower() == 'true'
-STOP_LOSS_PCT = float(os.getenv('STOP_LOSS_PCT', '0.015'))  # 1.5% stop loss (more conservative)
+STOP_LOSS_PCT = float(os.getenv('STOP_LOSS_PCT', '0.01'))  # 1% stop loss (more conservative)
 TRAILING_STOP = os.getenv('TRAILING_STOP', 'True').lower() == 'true'
-TRAILING_STOP_PCT = float(os.getenv('TRAILING_STOP_PCT', '0.03'))  # 3% trailing stop
+TRAILING_STOP_PCT = float(os.getenv('TRAILING_STOP_PCT', '0.025'))  # 2.5% trailing stop
 
 # Enhanced backtesting parameters
 BACKTEST_START_DATE = os.getenv('BACKTEST_START_DATE', '2023-01-01')
