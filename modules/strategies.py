@@ -46,17 +46,17 @@ class SmartTrendCatcher(TradingStrategy):
     Core Strategy:
     - Generates signals for every candle based on EMA alignment
     - Uses 10 and 30 EMA configuration
-    - ADX trend strength filter: ADX <= 14 = HOLD (weak trend)
+    - ADX trend strength filter: ADX <= 20 = HOLD (weak trend)
     - Continuous signal generation for each candle
     
     Signal Generation (Every Candle):
-    - BUY: 10 EMA > 30 EMA AND ADX > 14 (bullish alignment with strong trend)
-    - SELL: 10 EMA < 30 EMA AND ADX > 14 (bearish alignment with strong trend)  
-    - HOLD: ADX <= 14 (weak trend) OR no clear EMA alignment
-    
+    - BUY: 10 EMA > 30 EMA AND ADX > 20 (bullish alignment with strong trend)
+    - SELL: 10 EMA < 30 EMA AND ADX > 20 (bearish alignment with strong trend)  
+    - HOLD: ADX <= 20 (weak trend) OR no clear EMA alignment
+
     Benefits of ADX Integration:
     - Filters out signals during weak trending conditions
-    - ADX <= 14 indicates sideways/choppy market conditions
+    - ADX <= 20 indicates sideways/choppy market conditions
     - Reduces false signals in ranging markets
     - Only trades when trend strength is sufficient
     """
@@ -65,7 +65,7 @@ class SmartTrendCatcher(TradingStrategy):
                  ema_slow=30,               # Slow EMA (30 period)
                  ema_fast=10,               # Fast EMA (10 period)
                  adx_period=14,             # ADX period (14 is standard)
-                 adx_threshold=14.0):       # ADX threshold for trend strength
+                 adx_threshold=20.0):       # ADX threshold for trend strength
         
         super().__init__("SmartTrendCatcher")
         
@@ -246,7 +246,7 @@ def get_strategy(strategy_name):
         FAST_EMA = 10
         SLOW_EMA = 30
         ADX_PERIOD = 14
-        ADX_THRESHOLD = 14.0
+        ADX_THRESHOLD = 20.0
     
     strategies = {
         'SmartTrendCatcher': SmartTrendCatcher(

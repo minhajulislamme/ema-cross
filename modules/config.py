@@ -64,15 +64,15 @@ SLOW_EMA = int(os.getenv('SLOW_EMA', '30'))    # Slow EMA (30 period)
 
 # ADX parameters (trend strength filter)
 ADX_PERIOD = int(os.getenv('ADX_PERIOD', '14'))  # ADX period (14 is standard)
-ADX_THRESHOLD = float(os.getenv('ADX_THRESHOLD', '14.0'))  # ADX <= 14 = HOLD (weak trend)
+ADX_THRESHOLD = float(os.getenv('ADX_THRESHOLD', '20.0'))  # ADX <= 20 = HOLD (weak trend)
 
-TIMEFRAME = os.getenv('TIMEFRAME', '5m')
+TIMEFRAME = os.getenv('TIMEFRAME', '15m')
 
 # Risk management - Enhanced stop loss settings
 USE_STOP_LOSS = os.getenv('USE_STOP_LOSS', 'True').lower() == 'true'
-STOP_LOSS_PCT = float(os.getenv('STOP_LOSS_PCT', '0.01'))  # 1% stop loss (more conservative)
+STOP_LOSS_PCT = float(os.getenv('STOP_LOSS_PCT', '0.017'))  # 1.7% stop loss (more conservative)
 TRAILING_STOP = os.getenv('TRAILING_STOP', 'True').lower() == 'true'
-TRAILING_STOP_PCT = float(os.getenv('TRAILING_STOP_PCT', '0.025'))  # 2.5% trailing stop
+TRAILING_STOP_PCT = float(os.getenv('TRAILING_STOP_PCT', '0.06'))  # 6% trailing stop
 
 # Enhanced backtesting parameters
 BACKTEST_START_DATE = os.getenv('BACKTEST_START_DATE', '2023-01-01')
