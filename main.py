@@ -1265,8 +1265,7 @@ def check_for_signals(symbol=None):
         
     except Exception as e:
         logger.error(f"❌ Error checking signals: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return  # Early return to avoid executing trades if signal generation failed
         
     # Continue with existing sophisticated trade execution logic

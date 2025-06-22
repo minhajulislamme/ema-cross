@@ -599,3 +599,18 @@ class RiskManager:
         
         logger.debug(f"Dynamic compound rate: {adjusted_rate:.2%} (base: {base_rate:.2%}, adjustment: {self.compound_adjustment_factor:.2f})")
         return adjusted_rate
+        
+    def clear_locked_trailing_stop(self, symbol):
+        """
+        Clear any locked trailing stop state for a symbol when position is closed.
+        This method is called when a position is closed to reset any trailing stop
+        tracking state that might interfere with new positions.
+        
+        Args:
+            symbol: Trading pair symbol
+        """
+        # This method is a placeholder for future trailing stop state management
+        # Currently, trailing stops are managed through Binance orders directly
+        # and don't require additional state clearing
+        logger.debug(f"Cleared locked trailing stop state for {symbol}")
+        return True
