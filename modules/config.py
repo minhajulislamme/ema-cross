@@ -67,7 +67,7 @@ ADX_SMOOTHING = int(os.getenv('ADX_SMOOTHING', '14'))  # ADX smoothing period (a
 ADX_DI_LENGTH = int(os.getenv('ADX_DI_LENGTH', '20'))  # DI length period (dilen in Pine Script)
 ADX_THRESHOLD = float(os.getenv('ADX_THRESHOLD', '20.0'))  # ADX <= 20 = HOLD (weak trend)
 
-TIMEFRAME = os.getenv('TIMEFRAME', '15m')
+TIMEFRAME = os.getenv('TIMEFRAME', '30m')  # Default to 30 minutes, can be overridden
 
 # Risk management - Enhanced stop loss settings
 USE_STOP_LOSS = os.getenv('USE_STOP_LOSS', 'True').lower() == 'true'
