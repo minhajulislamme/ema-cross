@@ -7,10 +7,33 @@ import ta.trend
 import ta.volatility
 import logging
 import warnings
+import traceback
 
 # Setup logging
 logger = logging.getLogger(__name__)
 warnings.simplefilter(action='ignore', category=FutureWarning)
+
+# Import EMA and ADX config values at module level
+try:
+    from modules.config import FAST_EMA, SLOW_EMA, ADX_SMOOTHING, ADX_DI_LENGTH, ADX_THRESHOLD
+except ImportError:
+    # Fallback values
+    FAST_EMA = 10
+    SLOW_EMA = 30
+    ADX_SMOOTHING = 14
+    ADX_DI_LENGTH = 20
+    ADX_THRESHOLD = 20.0
+
+# Import EMA and ADX config values at module level
+try:
+    from modules.config import FAST_EMA, SLOW_EMA, ADX_SMOOTHING, ADX_DI_LENGTH, ADX_THRESHOLD
+except ImportError:
+    # Fallback values
+    FAST_EMA = 10
+    SLOW_EMA = 30
+    ADX_SMOOTHING = 14
+    ADX_DI_LENGTH = 20
+    ADX_THRESHOLD = 20.0
 
 
 class TradingStrategy:
@@ -147,7 +170,7 @@ class SmartTrendCatcher(TradingStrategy):
             # Generate signals with ADX filter
             df['buy_signal'] = df['fast_above_slow'] & df['strong_trend']
             df['sell_signal'] = df['fast_below_slow'] & df['strong_trend']
-            df['hold_signal'] = ~df['strong_trend'] | ~(df['buy_signal'] | df['sell_signal'])
+            df['hold_signal'] = ~df['strong_trend']  # Simplified: HOLD when trend is weak
             
             return df
             
@@ -205,8 +228,10 @@ class SmartTrendCatcher(TradingStrategy):
             minus_dm_rma = pd.Series(minus_dm).ewm(alpha=alpha_di, adjust=False).mean()
             
             # Calculate Plus DI and Minus DI
-            plus_di = 100 * plus_dm_rma / tr_rma
-            minus_di = 100 * minus_dm_rma / tr_rma
+            # Avoid division by zero in TR calculations
+            tr_rma_safe = tr_rma.replace(0, np.finfo(float).eps)  # Replace zeros with smallest float
+            plus_di = 100 * plus_dm_rma / tr_rma_safe
+            minus_di = 100 * minus_dm_rma / tr_rma_safe
             
             # Handle division by zero and fill NaN values
             plus_di = plus_di.fillna(0)
@@ -291,7 +316,7 @@ class SmartTrendCatcher(TradingStrategy):
                 signal = 'HOLD'
                 logger.info(f"⚪ HOLD Signal - Weak Trend (Pure ADX Filter)")
                 logger.info(f"   Pure ADX: {latest['adx']:.2f} <= {self.adx_threshold} (weak trend)")
-                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f}, Slow EMA (30): {latest['ema_slow']:.6f}")
+                logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f}, Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             # BUY Signal: Fast EMA above Slow EMA AND ADX > threshold
@@ -299,7 +324,7 @@ class SmartTrendCatcher(TradingStrategy):
                 signal = 'BUY'
                 logger.info(f"🟢 BUY Signal - EMA Bullish Alignment + Strong Trend")
                 logger.info(f"   Pure ADX: {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
-                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f} > Slow EMA (30): {latest['ema_slow']:.6f}")
+                logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f} > Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             # SELL Signal: Fast EMA below Slow EMA AND ADX > threshold
@@ -307,7 +332,7 @@ class SmartTrendCatcher(TradingStrategy):
                 signal = 'SELL'
                 logger.info(f"🔴 SELL Signal - EMA Bearish Alignment + Strong Trend")
                 logger.info(f"   Pure ADX: {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
-                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f} < Slow EMA (30): {latest['ema_slow']:.6f}")
+                logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f} < Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             # HOLD Signal: Strong trend but no clear EMA alignment
@@ -315,30 +340,20 @@ class SmartTrendCatcher(TradingStrategy):
                 signal = 'HOLD'
                 logger.info(f"⚪ HOLD Signal - No Clear EMA Alignment")
                 logger.info(f"   Pure ADX: {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
-                logger.info(f"   Fast EMA (10): {latest['ema_fast']:.6f}, Slow EMA (30): {latest['ema_slow']:.6f}")
+                logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f}, Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             return signal
             
         except Exception as e:
             logger.error(f"Error in EMA+ADX signal generation: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return None
+
+
 # Factory function to get a strategy by name
 def get_strategy(strategy_name):
     """Factory function to get a strategy by name"""
-    # Import EMA and ADX config values
-    try:
-        from modules.config import FAST_EMA, SLOW_EMA, ADX_SMOOTHING, ADX_DI_LENGTH, ADX_THRESHOLD
-    except ImportError:
-        # Fallback values
-        FAST_EMA = 10
-        SLOW_EMA = 30
-        ADX_SMOOTHING = 14
-        ADX_DI_LENGTH = 20
-        ADX_THRESHOLD = 20.0
-    
     strategies = {
         'SmartTrendCatcher': SmartTrendCatcher(
             ema_slow=SLOW_EMA,

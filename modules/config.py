@@ -33,7 +33,7 @@ STRATEGY = os.getenv('STRATEGY', 'SmartTrendCatcher')
 
 # Position sizing - Enhanced risk management (aligned with SmartTrendCatcher)
 INITIAL_BALANCE = float(os.getenv('INITIAL_BALANCE', '50.0'))
-FIXED_TRADE_PERCENTAGE = float(os.getenv('FIXED_TRADE_PERCENTAGE', '0.40'))  # 40% to match strategy base_position_pct
+FIXED_TRADE_PERCENTAGE = float(os.getenv('FIXED_TRADE_PERCENTAGE', '0.20'))  # 40% to match strategy base_position_pct
 MAX_OPEN_POSITIONS = int(os.getenv('MAX_OPEN_POSITIONS', '3'))  # Conservative for better risk management
 
 # Margin safety settings - More conservative
@@ -67,7 +67,7 @@ ADX_SMOOTHING = int(os.getenv('ADX_SMOOTHING', '14'))  # ADX smoothing period (a
 ADX_DI_LENGTH = int(os.getenv('ADX_DI_LENGTH', '20'))  # DI length period (dilen in Pine Script)
 ADX_THRESHOLD = float(os.getenv('ADX_THRESHOLD', '20.0'))  # ADX <= 20 = HOLD (weak trend)
 
-TIMEFRAME = os.getenv('TIMEFRAME', '30m')  # Default to 30 minutes, can be overridden
+TIMEFRAME = os.getenv('TIMEFRAME', '15m')  # Default to 15 minutes, can be overridden
 
 # Risk management - Enhanced stop loss settings
 USE_STOP_LOSS = os.getenv('USE_STOP_LOSS', 'True').lower() == 'true'
