@@ -49,13 +49,13 @@ class TradingStrategy:
 
 class SmartTrendCatcher(TradingStrategy):
     """
-    EMA + ADX Trend Strategy:
+    EMA Crossover + ADX Trend Strategy:
     
     Core Strategy:
-    - Combines EMA alignment with ADX trend strength filtering
+    - Combines EMA crossover signals with ADX trend strength filtering
     - Uses 10 and 30 EMA configuration with 14-period ADX
     - ADX <= 20 forces HOLD signal (weak trend condition)
-    - Only generates BUY/SELL when both EMA alignment and ADX strength confirm
+    - Only generates BUY/SELL when EMA crossover occurs AND ADX confirms strength
     
     Technical Indicators (pandas_ta):
     - EMA (Exponential Moving Average): Fast (10) and Slow (30) periods
@@ -63,15 +63,15 @@ class SmartTrendCatcher(TradingStrategy):
     - Standard implementations using pandas_ta library
     
     Signal Generation Logic:
-    - BUY: 10 EMA > 30 EMA AND ADX > 20 (strong bullish trend)
-    - SELL: 10 EMA < 30 EMA AND ADX > 20 (strong bearish trend)  
-    - HOLD: ADX <= 20 (weak trend - no trading regardless of EMA alignment)
+    - BUY: Fast EMA crosses ABOVE Slow EMA AND ADX > 20 (bullish crossover + strong trend)
+    - SELL: Fast EMA crosses BELOW Slow EMA AND ADX > 20 (bearish crossover + strong trend)  
+    - HOLD: No crossover OR ADX <= 20 (no signal or weak trend)
 
-    Benefits of EMA + ADX Strategy:
+    Benefits of EMA Crossover + ADX Strategy:
     - Filters out weak trends and sideways markets
     - Reduces false signals during consolidation
-    - Only trades when trend strength is confirmed
-    - Combines trend direction (EMA) with trend strength (ADX)
+    - Only trades on actual trend changes (crossovers)
+    - Combines trend direction change (EMA crossover) with trend strength (ADX)
     """
     
     def __init__(self, 
@@ -100,12 +100,12 @@ class SmartTrendCatcher(TradingStrategy):
         self._warning_count = 0
         
         logger.info(f"{self.name} initialized with:")
-        logger.info(f"  EMA Alignment: {ema_fast}/{ema_slow} (pandas_ta implementation)")
+        logger.info(f"  EMA Crossover: {ema_fast}/{ema_slow} (pandas_ta implementation)")
         logger.info(f"  ADX Filter: {adx_period}-period, threshold <= {adx_threshold} = HOLD")
-        logger.info(f"  Signal Generation: EMA alignment + ADX strength confirmation")
+        logger.info(f"  Signal Generation: EMA crossover + ADX strength confirmation")
     
     def add_indicators(self, df):
-        """Add EMA and ADX indicators for trend strategy"""
+        """Add EMA and ADX indicators for crossover strategy"""
         try:
             # Ensure sufficient data
             min_required = max(self.ema_slow, self.ema_fast, self.adx_period) + 5
@@ -139,33 +139,51 @@ class SmartTrendCatcher(TradingStrategy):
             df['ema_fast'] = df['ema_fast'].interpolate(method='linear').bfill()
             df['adx'] = df['adx'].interpolate(method='linear').bfill()
             
-            # EMA alignment conditions
-            df['fast_above_slow'] = df['ema_fast'] > df['ema_slow']
-            df['fast_below_slow'] = df['ema_fast'] < df['ema_slow']
+            # EMA crossover detection (need at least 2 periods to detect crossover)
+            if len(df) >= 2:
+                # Current period alignment
+                df['fast_above_slow'] = df['ema_fast'] > df['ema_slow']
+                df['fast_below_slow'] = df['ema_fast'] < df['ema_slow']
+                
+                # Previous period alignment
+                df['fast_above_slow_prev'] = df['fast_above_slow'].shift(1)
+                df['fast_below_slow_prev'] = df['fast_below_slow'].shift(1)
+                
+                # Crossover detection
+                df['bullish_crossover'] = (df['fast_above_slow'] & df['fast_below_slow_prev'])  # Fast crosses above slow
+                df['bearish_crossover'] = (df['fast_below_slow'] & df['fast_above_slow_prev'])  # Fast crosses below slow
+            else:
+                # Not enough data for crossover detection
+                df['fast_above_slow'] = df['ema_fast'] > df['ema_slow']
+                df['fast_below_slow'] = df['ema_fast'] < df['ema_slow']
+                df['fast_above_slow_prev'] = False
+                df['fast_below_slow_prev'] = False
+                df['bullish_crossover'] = False
+                df['bearish_crossover'] = False
             
             # ADX strength condition
             df['adx_strong'] = df['adx'] > self.adx_threshold
             df['adx_weak'] = df['adx'] <= self.adx_threshold
             
-            # Generate signals based on EMA alignment AND ADX strength
-            df['buy_signal'] = df['fast_above_slow'] & df['adx_strong']
-            df['sell_signal'] = df['fast_below_slow'] & df['adx_strong']
-            df['hold_signal'] = df['adx_weak']  # ADX <= threshold = HOLD
+            # Generate signals based on EMA crossover AND ADX strength
+            df['buy_signal'] = df['bullish_crossover'] & df['adx_strong']
+            df['sell_signal'] = df['bearish_crossover'] & df['adx_strong']
+            df['hold_signal'] = df['adx_weak'] | (~df['bullish_crossover'] & ~df['bearish_crossover'])  # ADX weak OR no crossover
             
             return df
             
         except Exception as e:
-            logger.error(f"Error adding EMA+ADX indicators: {e}")
+            logger.error(f"Error adding EMA crossover+ADX indicators: {e}")
             return df
     
     def get_signal(self, klines):
-        """Generate EMA+ADX filtered signals"""
+        """Generate EMA crossover+ADX filtered signals"""
         try:
             min_required = max(self.ema_slow, self.ema_fast, self.adx_period) + 5
             if not klines or len(klines) < min_required:
                 # Show warning every 10th time to reduce log spam
                 if self._warning_count % 10 == 0:
-                    logger.warning(f"Insufficient data for EMA+ADX signal (need {min_required}, have {len(klines) if klines else 0})")
+                    logger.warning(f"Insufficient data for EMA crossover+ADX signal (need {min_required}, have {len(klines) if klines else 0})")
                 self._warning_count += 1
                 return None
             
@@ -191,7 +209,7 @@ class SmartTrendCatcher(TradingStrategy):
                 logger.error("Failed to clean price data after interpolation")
                 return None
             
-            # Add EMA and ADX indicators
+            # Add EMA crossover and ADX indicators
             df = self.add_indicators(df)
             
             if len(df) < 2:
@@ -199,45 +217,44 @@ class SmartTrendCatcher(TradingStrategy):
             
             latest = df.iloc[-1]
             
-            # Validate required columns
-            required_columns = ['buy_signal', 'sell_signal', 'hold_signal', 'ema_fast', 'ema_slow', 'adx']
+            # Validate required columns for crossover detection
+            required_columns = ['buy_signal', 'sell_signal', 'hold_signal', 'ema_fast', 'ema_slow', 'adx', 'bullish_crossover', 'bearish_crossover']
             
             for col in required_columns:
                 if col not in df.columns or pd.isna(latest[col]):
                     logger.warning(f"Missing or invalid indicator: {col}")
                     return None
             
-            # Generate signal based on EMA+ADX combination
+            # Generate signal based on EMA crossover+ADX combination
             signal = None
             
-            # HOLD Signal: ADX <= threshold (weak trend overrides everything)
-            if latest['hold_signal']:
-                signal = 'HOLD'
-                logger.info(f"⚪ HOLD Signal - Weak Trend (ADX Filter)")
-                logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f} <= {self.adx_threshold} (weak trend)")
-                logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f}, Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
-                logger.info(f"   Current Price: {latest['close']:.6f}")
-            
-            # BUY Signal: Fast EMA above Slow EMA AND ADX > threshold
-            elif latest['buy_signal']:
+            # BUY Signal: Bullish crossover AND ADX > threshold
+            if latest['buy_signal']:
                 signal = 'BUY'
-                logger.info(f"🟢 BUY Signal - EMA Bullish + Strong Trend")
-                logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f} > Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
+                logger.info(f"🟢 BUY Signal - EMA Bullish Crossover + Strong Trend")
+                logger.info(f"   Fast EMA ({self.ema_fast}) crossed ABOVE Slow EMA ({self.ema_slow})")
+                logger.info(f"   Fast EMA: {latest['ema_fast']:.6f} > Slow EMA: {latest['ema_slow']:.6f}")
                 logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
-            # SELL Signal: Fast EMA below Slow EMA AND ADX > threshold
+            # SELL Signal: Bearish crossover AND ADX > threshold
             elif latest['sell_signal']:
                 signal = 'SELL'
-                logger.info(f"🔴 SELL Signal - EMA Bearish + Strong Trend")
-                logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f} < Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
+                logger.info(f"� SELL Signal - EMA Bearish Crossover + Strong Trend")
+                logger.info(f"   Fast EMA ({self.ema_fast}) crossed BELOW Slow EMA ({self.ema_slow})")
+                logger.info(f"   Fast EMA: {latest['ema_fast']:.6f} < Slow EMA: {latest['ema_slow']:.6f}")
                 logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
+            # HOLD Signal: No crossover OR ADX <= threshold (weak trend)
             else:
-                # This case should not happen with proper logic, but keep as fallback
                 signal = 'HOLD'
-                logger.info(f"⚪ HOLD Signal - No Clear Signal")
+                if latest['hold_signal'] and latest['adx'] <= self.adx_threshold:
+                    logger.info(f"⚪ HOLD Signal - Weak Trend (ADX Filter)")
+                    logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f} <= {self.adx_threshold} (weak trend)")
+                else:
+                    logger.info(f"⚪ HOLD Signal - No EMA Crossover")
+                    logger.info(f"   No crossover detected (waiting for Fast EMA to cross Slow EMA)")
                 logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f}, Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
                 logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
@@ -245,7 +262,7 @@ class SmartTrendCatcher(TradingStrategy):
             return signal
             
         except Exception as e:
-            logger.error(f"Error in EMA+ADX signal generation: {e}")
+            logger.error(f"Error in EMA crossover+ADX signal generation: {e}")
             logger.error(traceback.format_exc())
             return None
 

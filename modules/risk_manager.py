@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from modules.config import (
     MAX_OPEN_POSITIONS,
     USE_STOP_LOSS, STOP_LOSS_PCT, 
-    TRAILING_STOP, TRAILING_STOP_PCT,
+    TRAILING_STOP, TRAILING_STOP_PCT, UPDATE_TRAILING_ON_HOLD,
+    USE_TAKE_PROFIT, TAKE_PROFIT_PCT, TAKE_PROFIT_MODE,
     AUTO_COMPOUND, COMPOUND_REINVEST_PERCENT, COMPOUND_INTERVAL,
     MULTI_INSTANCE_MODE, MAX_POSITIONS_PER_SYMBOL,
     LEVERAGE,
@@ -215,6 +216,37 @@ class RiskManager:
         logger.info(f"Calculated stop loss at {stop_price} ({STOP_LOSS_PCT*100}%)")
         return stop_price
         
+    def calculate_take_profit(self, symbol, side, entry_price):
+        """
+        Calculate take profit price for a position
+        
+        Args:
+            symbol: Trading pair symbol
+            side: Position side ('BUY' for long, 'SELL' for short)
+            entry_price: Entry price of the position
+            
+        Returns:
+            take_profit_price: Calculated take profit price
+        """
+        if not USE_TAKE_PROFIT:
+            return None
+            
+        # Get symbol info for price precision
+        symbol_info = self.binance_client.get_symbol_info(symbol)
+        price_precision = symbol_info['price_precision'] if symbol_info else 6
+        
+        if side == "BUY":  # Long position
+            take_profit_price = entry_price * (1 + TAKE_PROFIT_PCT)
+        else:  # Short position
+            take_profit_price = entry_price * (1 - TAKE_PROFIT_PCT)
+            
+        # Round to symbol precision
+        take_profit_price = round(take_profit_price, price_precision)
+        
+        logger.info(f"Calculated take profit for {side} position at {entry_price}: {take_profit_price} ({TAKE_PROFIT_PCT*100:.1f}%)")
+        
+        return take_profit_price
+    
     def _get_current_stop_loss_price(self, symbol, side, entry_price):
         """
         Get the actual current stop loss price from existing orders.
