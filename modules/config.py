@@ -56,14 +56,15 @@ COMPOUND_MIN_WIN_RATE = float(os.getenv('COMPOUND_MIN_WIN_RATE', '0.6'))  # Requ
 COMPOUND_MAX_DRAWDOWN = float(os.getenv('COMPOUND_MAX_DRAWDOWN', '0.15'))  # Pause if >15% drawdown
 COMPOUND_SCALING_FACTOR = float(os.getenv('COMPOUND_SCALING_FACTOR', '0.5'))  # Reduce compounding if performance poor
 
-# Technical indicator parameters - EMA Alignment Strategy with ADX Filter
+# Technical indicator parameters - EMA Alignment Strategy with Pure ADX Filter
 
 # EMA parameters (10/30 EMA alignment for every-candle signals)
 FAST_EMA = int(os.getenv('FAST_EMA', '10'))    # Fast EMA (10 period)
 SLOW_EMA = int(os.getenv('SLOW_EMA', '30'))    # Slow EMA (30 period)
 
-# ADX parameters (trend strength filter)
-ADX_PERIOD = int(os.getenv('ADX_PERIOD', '14'))  # ADX period (14 is standard)
+# ADX parameters (Pure ADX by Minhaz implementation - trend strength filter)
+ADX_SMOOTHING = int(os.getenv('ADX_SMOOTHING', '14'))  # ADX smoothing period (adxlen in Pine Script)
+ADX_DI_LENGTH = int(os.getenv('ADX_DI_LENGTH', '20'))  # DI length period (dilen in Pine Script)
 ADX_THRESHOLD = float(os.getenv('ADX_THRESHOLD', '20.0'))  # ADX <= 20 = HOLD (weak trend)
 
 TIMEFRAME = os.getenv('TIMEFRAME', '15m')
