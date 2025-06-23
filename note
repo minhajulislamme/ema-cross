@@ -178,3 +178,4 @@ python -m compileall modules/
 python -m compileall /home/minhajulislam/tradingbot/
 
 python3 -m compileall .
+cd /home/minhajulislam/tradingbot && pip uninstall pandas-ta

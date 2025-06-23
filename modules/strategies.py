@@ -1,10 +1,7 @@
 from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 import pandas as pd
-import ta
-import ta.momentum
-import ta.trend
-import ta.volatility
+import pandas_ta as ta
 import logging
 import warnings
 import traceback
@@ -15,25 +12,13 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # Import EMA and ADX config values at module level
 try:
-    from modules.config import FAST_EMA, SLOW_EMA, ADX_SMOOTHING, ADX_DI_LENGTH, ADX_THRESHOLD
+    from modules.config import FAST_EMA, SLOW_EMA, ADX_PERIOD, ADX_THRESHOLD
 except ImportError:
     # Fallback values
     FAST_EMA = 10
     SLOW_EMA = 30
-    ADX_SMOOTHING = 14
-    ADX_DI_LENGTH = 20
-    ADX_THRESHOLD = 20.0
-
-# Import EMA and ADX config values at module level
-try:
-    from modules.config import FAST_EMA, SLOW_EMA, ADX_SMOOTHING, ADX_DI_LENGTH, ADX_THRESHOLD
-except ImportError:
-    # Fallback values
-    FAST_EMA = 10
-    SLOW_EMA = 30
-    ADX_SMOOTHING = 14
-    ADX_DI_LENGTH = 20
-    ADX_THRESHOLD = 20.0
+    ADX_PERIOD = 14
+    ADX_THRESHOLD = 20
 
 
 class TradingStrategy:
@@ -64,40 +49,36 @@ class TradingStrategy:
 
 class SmartTrendCatcher(TradingStrategy):
     """
-    EMA Alignment Strategy with Pure ADX Trend Strength Filter:
+    EMA + ADX Trend Strategy:
     
     Core Strategy:
-    - Generates signals for every candle based on EMA alignment
-    - Uses 10 and 30 EMA configuration
-    - Pure ADX by Minhaz trend strength filter: ADX <= 20 = HOLD (weak trend)
-    - Continuous signal generation for each candle
+    - Combines EMA alignment with ADX trend strength filtering
+    - Uses 10 and 30 EMA configuration with 14-period ADX
+    - ADX <= 20 forces HOLD signal (weak trend condition)
+    - Only generates BUY/SELL when both EMA alignment and ADX strength confirm
     
-    Pure ADX Implementation:
-    - Custom ADX calculation based on Pine Script version 6
-    - ADX Smoothing: 14 periods (adxlen in Pine Script)
-    - DI Length: 20 periods (dilen in Pine Script)
-    - More precise directional movement calculation
-    - Uses RMA (Relative Moving Average) for smoothing
+    Technical Indicators (pandas_ta):
+    - EMA (Exponential Moving Average): Fast (10) and Slow (30) periods
+    - ADX (Average Directional Index): 14-period for trend strength
+    - Standard implementations using pandas_ta library
     
-    Signal Generation (Every Candle):
-    - BUY: 10 EMA > 30 EMA AND Pure ADX > 20 (bullish alignment with strong trend)
-    - SELL: 10 EMA < 30 EMA AND Pure ADX > 20 (bearish alignment with strong trend)  
-    - HOLD: Pure ADX <= 20 (weak trend) OR no clear EMA alignment
+    Signal Generation Logic:
+    - BUY: 10 EMA > 30 EMA AND ADX > 20 (strong bullish trend)
+    - SELL: 10 EMA < 30 EMA AND ADX > 20 (strong bearish trend)  
+    - HOLD: ADX <= 20 (weak trend - no trading regardless of EMA alignment)
 
-    Benefits of Pure ADX Integration:
-    - Filters out signals during weak trending conditions
-    - Pure ADX <= 20 indicates sideways/choppy market conditions
-    - Reduces false signals in ranging markets
-    - Only trades when trend strength is sufficient
-    - More accurate directional movement calculation than standard ADX
+    Benefits of EMA + ADX Strategy:
+    - Filters out weak trends and sideways markets
+    - Reduces false signals during consolidation
+    - Only trades when trend strength is confirmed
+    - Combines trend direction (EMA) with trend strength (ADX)
     """
     
     def __init__(self, 
                  ema_slow=30,               # Slow EMA (30 period)
                  ema_fast=10,               # Fast EMA (10 period)
-                 adx_smoothing=14,          # ADX smoothing period (equivalent to adxlen in Pine Script)
-                 adx_di_length=20,          # DI length period (equivalent to dilen in Pine Script)
-                 adx_threshold=20.0):       # ADX threshold for trend strength
+                 adx_period=14,             # ADX period (14 standard)
+                 adx_threshold=20):  # ADX threshold from config (<=20 = HOLD)
         
         super().__init__("SmartTrendCatcher")
         
@@ -106,31 +87,28 @@ class SmartTrendCatcher(TradingStrategy):
             raise ValueError("EMA periods must be positive")
         if ema_fast >= ema_slow:
             raise ValueError("Fast EMA must be less than slow EMA")
-        if adx_smoothing <= 0 or adx_di_length <= 0:
-            raise ValueError("ADX parameters must be positive")
+        if adx_period <= 0:
+            raise ValueError("ADX period must be positive")
         if adx_threshold < 0:
             raise ValueError("ADX threshold must be non-negative")
         
         # Store parameters
         self.ema_slow = ema_slow
         self.ema_fast = ema_fast
-        self.adx_smoothing = adx_smoothing
-        self.adx_di_length = adx_di_length
+        self.adx_period = adx_period
         self.adx_threshold = adx_threshold
         self._warning_count = 0
         
         logger.info(f"{self.name} initialized with:")
-        logger.info(f"  EMA Alignment: {ema_fast}/{ema_slow}")
-        logger.info(f"  ADX Smoothing: {adx_smoothing}")
-        logger.info(f"  ADX DI Length: {adx_di_length}")
-        logger.info(f"  ADX Threshold: <= {adx_threshold} (HOLD), > {adx_threshold} (Allow signals)")
-        logger.info(f"  Signal Generation: Every candle with ADX trend strength filter")
+        logger.info(f"  EMA Alignment: {ema_fast}/{ema_slow} (pandas_ta implementation)")
+        logger.info(f"  ADX Filter: {adx_period}-period, threshold <= {adx_threshold} = HOLD")
+        logger.info(f"  Signal Generation: EMA alignment + ADX strength confirmation")
     
     def add_indicators(self, df):
-        """Add EMA and ADX indicators for alignment strategy with trend strength filter"""
+        """Add EMA and ADX indicators for trend strategy"""
         try:
             # Ensure sufficient data
-            min_required = max(self.ema_slow, self.ema_fast, self.adx_smoothing, self.adx_di_length) + 5
+            min_required = max(self.ema_slow, self.ema_fast, self.adx_period) + 5
             if len(df) < min_required:
                 logger.warning(f"Insufficient data: need {min_required}, got {len(df)}")
                 return df
@@ -148,12 +126,13 @@ class SmartTrendCatcher(TradingStrategy):
                     df[col] = df[col].replace(0, np.nan)
                     df[col] = df[col].interpolate(method='linear').bfill().ffill()
                     
-            # Calculate EMA indicators
-            df['ema_slow'] = ta.trend.ema_indicator(df['close'], window=self.ema_slow)
-            df['ema_fast'] = ta.trend.ema_indicator(df['close'], window=self.ema_fast)
+            # Calculate EMA indicators using pandas_ta
+            df['ema_slow'] = ta.ema(df['close'], length=self.ema_slow)
+            df['ema_fast'] = ta.ema(df['close'], length=self.ema_fast)
             
-            # Calculate custom ADX indicator (Pure ADX by Minhaz implementation)
-            df['adx'] = self._calculate_pure_adx(df, self.adx_di_length, self.adx_smoothing)
+            # Calculate ADX indicator using pandas_ta
+            adx_result = ta.adx(high=df['high'], low=df['low'], close=df['close'], length=self.adx_period)
+            df['adx'] = adx_result[f'ADX_{self.adx_period}']
             
             # Handle NaN values
             df['ema_slow'] = df['ema_slow'].interpolate(method='linear').bfill()
@@ -164,105 +143,25 @@ class SmartTrendCatcher(TradingStrategy):
             df['fast_above_slow'] = df['ema_fast'] > df['ema_slow']
             df['fast_below_slow'] = df['ema_fast'] < df['ema_slow']
             
-            # ADX trend strength condition (ADX > threshold for strong trend)
-            df['strong_trend'] = df['adx'] > self.adx_threshold
+            # ADX strength condition
+            df['adx_strong'] = df['adx'] > self.adx_threshold
+            df['adx_weak'] = df['adx'] <= self.adx_threshold
             
-            # Generate signals with ADX filter
-            df['buy_signal'] = df['fast_above_slow'] & df['strong_trend']
-            df['sell_signal'] = df['fast_below_slow'] & df['strong_trend']
-            df['hold_signal'] = ~df['strong_trend']  # Simplified: HOLD when trend is weak
+            # Generate signals based on EMA alignment AND ADX strength
+            df['buy_signal'] = df['fast_above_slow'] & df['adx_strong']
+            df['sell_signal'] = df['fast_below_slow'] & df['adx_strong']
+            df['hold_signal'] = df['adx_weak']  # ADX <= threshold = HOLD
             
             return df
             
         except Exception as e:
-            logger.error(f"Error adding EMA and ADX indicators: {e}")
+            logger.error(f"Error adding EMA+ADX indicators: {e}")
             return df
-    
-    def _calculate_pure_adx(self, df, di_length=20, adx_smoothing=14):
-        """
-        Calculate Pure ADX by Minhaz - Custom implementation based on Pine Script
-        //@version=6
-        indicator("Pure ADX By Minhaz", format=format.price, precision=2)
-        
-        Args:
-            df: DataFrame with OHLC data
-            di_length: DI Length (dilen in Pine Script, default 20)
-            adx_smoothing: ADX Smoothing (adxlen in Pine Script, default 14)
-        
-        Returns:
-            ADX series
-        """
-        try:
-            # Calculate price changes
-            high_change = df['high'].diff()
-            low_change = -df['low'].diff()
-            
-            # Calculate directional movements (plusDM and minusDM)
-            plus_dm = np.where(
-                (high_change > low_change) & (high_change > 0),
-                high_change,
-                0
-            )
-            minus_dm = np.where(
-                (low_change > high_change) & (low_change > 0),
-                low_change,
-                0
-            )
-            
-            # Calculate True Range (TR)
-            tr1 = df['high'] - df['low']
-            tr2 = np.abs(df['high'] - df['close'].shift(1))
-            tr3 = np.abs(df['low'] - df['close'].shift(1))
-            true_range = np.maximum(tr1, np.maximum(tr2, tr3))
-            
-            # Calculate smoothed values using RMA (Relative Moving Average)
-            # RMA in Pine Script is equivalent to EWM with alpha = 1/length
-            alpha_di = 1.0 / di_length
-            alpha_adx = 1.0 / adx_smoothing
-            
-            # Smoothed True Range
-            tr_rma = pd.Series(true_range).ewm(alpha=alpha_di, adjust=False).mean()
-            
-            # Smoothed Plus DM and Minus DM
-            plus_dm_rma = pd.Series(plus_dm).ewm(alpha=alpha_di, adjust=False).mean()
-            minus_dm_rma = pd.Series(minus_dm).ewm(alpha=alpha_di, adjust=False).mean()
-            
-            # Calculate Plus DI and Minus DI
-            # Avoid division by zero in TR calculations
-            tr_rma_safe = tr_rma.replace(0, np.finfo(float).eps)  # Replace zeros with smallest float
-            plus_di = 100 * plus_dm_rma / tr_rma_safe
-            minus_di = 100 * minus_dm_rma / tr_rma_safe
-            
-            # Handle division by zero and fill NaN values
-            plus_di = plus_di.fillna(0)
-            minus_di = minus_di.fillna(0)
-            
-            # Calculate DX (Directional Index)
-            di_sum = plus_di + minus_di
-            di_diff = np.abs(plus_di - minus_di)
-            
-            # Avoid division by zero
-            dx = np.where(di_sum == 0, 0, 100 * di_diff / di_sum)
-            
-            # Calculate ADX using RMA smoothing
-            adx = pd.Series(dx).ewm(alpha=alpha_adx, adjust=False).mean()
-            
-            # Fill initial NaN values with 0
-            adx = adx.fillna(0)
-            
-            logger.debug(f"Pure ADX calculated with DI Length: {di_length}, ADX Smoothing: {adx_smoothing}")
-            
-            return adx
-            
-        except Exception as e:
-            logger.error(f"Error calculating Pure ADX: {e}")
-            # Fallback to standard ADX
-            return ta.trend.adx(df['high'], df['low'], df['close'], window=adx_smoothing)
     
     def get_signal(self, klines):
-        """Generate EMA alignment signals with ADX trend strength filter"""
+        """Generate EMA+ADX filtered signals"""
         try:
-            min_required = max(self.ema_slow, self.ema_fast, self.adx_smoothing, self.adx_di_length) + 5
+            min_required = max(self.ema_slow, self.ema_fast, self.adx_period) + 5
             if not klines or len(klines) < min_required:
                 # Show warning every 10th time to reduce log spam
                 if self._warning_count % 10 == 0:
@@ -301,46 +200,46 @@ class SmartTrendCatcher(TradingStrategy):
             latest = df.iloc[-1]
             
             # Validate required columns
-            required_columns = ['buy_signal', 'sell_signal', 'hold_signal', 'ema_fast', 'ema_slow', 'adx', 'strong_trend']
+            required_columns = ['buy_signal', 'sell_signal', 'hold_signal', 'ema_fast', 'ema_slow', 'adx']
             
             for col in required_columns:
                 if col not in df.columns or pd.isna(latest[col]):
                     logger.warning(f"Missing or invalid indicator: {col}")
                     return None
             
-            # Generate signal based on EMA alignment AND ADX trend strength
+            # Generate signal based on EMA+ADX combination
             signal = None
             
-            # Check ADX first - if ADX <= threshold, always HOLD
-            if latest['adx'] <= self.adx_threshold:
+            # HOLD Signal: ADX <= threshold (weak trend overrides everything)
+            if latest['hold_signal']:
                 signal = 'HOLD'
-                logger.info(f"⚪ HOLD Signal - Weak Trend (Pure ADX Filter)")
-                logger.info(f"   Pure ADX: {latest['adx']:.2f} <= {self.adx_threshold} (weak trend)")
+                logger.info(f"⚪ HOLD Signal - Weak Trend (ADX Filter)")
+                logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f} <= {self.adx_threshold} (weak trend)")
                 logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f}, Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             # BUY Signal: Fast EMA above Slow EMA AND ADX > threshold
             elif latest['buy_signal']:
                 signal = 'BUY'
-                logger.info(f"🟢 BUY Signal - EMA Bullish Alignment + Strong Trend")
-                logger.info(f"   Pure ADX: {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
+                logger.info(f"🟢 BUY Signal - EMA Bullish + Strong Trend")
                 logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f} > Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
+                logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             # SELL Signal: Fast EMA below Slow EMA AND ADX > threshold
             elif latest['sell_signal']:
                 signal = 'SELL'
-                logger.info(f"🔴 SELL Signal - EMA Bearish Alignment + Strong Trend")
-                logger.info(f"   Pure ADX: {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
+                logger.info(f"🔴 SELL Signal - EMA Bearish + Strong Trend")
                 logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f} < Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
+                logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
-            # HOLD Signal: Strong trend but no clear EMA alignment
             else:
+                # This case should not happen with proper logic, but keep as fallback
                 signal = 'HOLD'
-                logger.info(f"⚪ HOLD Signal - No Clear EMA Alignment")
-                logger.info(f"   Pure ADX: {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
+                logger.info(f"⚪ HOLD Signal - No Clear Signal")
                 logger.info(f"   Fast EMA ({self.ema_fast}): {latest['ema_fast']:.6f}, Slow EMA ({self.ema_slow}): {latest['ema_slow']:.6f}")
+                logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f}")
                 logger.info(f"   Current Price: {latest['close']:.6f}")
             
             return signal
@@ -358,8 +257,7 @@ def get_strategy(strategy_name):
         'SmartTrendCatcher': SmartTrendCatcher(
             ema_slow=SLOW_EMA,
             ema_fast=FAST_EMA,
-            adx_smoothing=ADX_SMOOTHING,
-            adx_di_length=ADX_DI_LENGTH,
+            adx_period=ADX_PERIOD,
             adx_threshold=ADX_THRESHOLD
         ),
     }
