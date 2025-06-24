@@ -801,3 +801,35 @@ class BinanceClient:
                 
         logger.info(f"Cancelled {cancelled} position-related orders for {symbol}")
         return cancelled
+    
+    def cancel_stop_loss_orders_only(self, symbol):
+        """
+        Cancel only stop loss orders for a position, preserving take profit orders
+        
+        This function is used for trailing stop loss updates to avoid cancelling
+        take profit orders when only the stop loss needs to be updated.
+        """
+        orders = self.get_open_orders(symbol)
+        cancelled = 0
+        
+        for order in orders:
+            try:
+                order_type = order.get('type')
+                order_id = order.get('orderId')
+                order_symbol = order.get('symbol')
+                
+                # Only cancel stop loss orders, not take profit orders
+                if (order_type in ['STOP_MARKET', 'STOP'] and 
+                    order_symbol == symbol and order_id):
+                    
+                    self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
+                    logger.info(f"Cancelled {order_type} order {order_id} for {symbol}")
+                    cancelled += 1
+                    
+            except BinanceAPIException as e:
+                logger.error(f"Failed to cancel stop loss order for {symbol}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error cancelling stop loss order for {symbol}: {e}")
+                
+        logger.info(f"Cancelled {cancelled} stop loss orders for {symbol} (preserved take profit orders)")
+        return cancelled

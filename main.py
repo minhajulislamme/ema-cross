@@ -1305,8 +1305,8 @@ def check_for_signals(symbol=None):
                     # Update stop loss if needed
                     if new_stop:
                         logger.info(f"Updating trailing stop loss on HOLD signal...")
-                        # Cancel existing orders for this symbol
-                        binance_client.cancel_position_orders(symbol)
+                        # Cancel only stop loss orders (preserve take profit)
+                        binance_client.cancel_stop_loss_orders_only(symbol)
                         time.sleep(0.5)  # Small delay to ensure orders are cancelled
                         
                         # Place new trailing stop loss
@@ -1338,8 +1338,8 @@ def check_for_signals(symbol=None):
                 
                 # Check if stop loss needs updating
                 if new_stop:
-                    # Cancel existing orders for this symbol
-                    binance_client.cancel_position_orders(symbol)
+                    # Cancel only stop loss orders (preserve take profit)
+                    binance_client.cancel_stop_loss_orders_only(symbol)
                     time.sleep(0.5)  # Small delay to ensure orders are cancelled
                     
                     # Place new trailing stop loss (only moves in favorable direction)
@@ -1491,8 +1491,8 @@ def check_for_signals(symbol=None):
                 
                 # Check if stop loss needs updating
                 if new_stop:
-                    # Cancel existing orders for this symbol
-                    binance_client.cancel_position_orders(symbol)
+                    # Cancel only stop loss orders (preserve take profit)
+                    binance_client.cancel_stop_loss_orders_only(symbol)
                     time.sleep(0.5)  # Small delay to ensure orders are cancelled
                     
                     # Place new trailing stop loss (only moves in favorable direction)
@@ -1648,8 +1648,8 @@ def check_for_signals(symbol=None):
             
             # Check if stop loss needs updating (take profit functionality removed)
             if new_stop:
-                # Only cancel orders for this specific symbol - critical for multi-instance mode
-                binance_client.cancel_position_orders(symbol)  # Use cancel_position_orders instead of cancel_all_open_orders
+                # Only cancel stop loss orders for this specific symbol (preserve take profit)
+                binance_client.cancel_stop_loss_orders_only(symbol)
                 time.sleep(0.5)  # Small delay to ensure orders are cancelled
                 
                 # Place new stop loss (only moves in favorable direction)
