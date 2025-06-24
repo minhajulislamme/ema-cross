@@ -1,0 +1,50 @@
+//@version=6
+indicator("ADX Only By Minhaz", overlay=false)
+
+// =============================================================================
+// INPUT PARAMETERS
+// =============================================================================
+
+// ADX Settings
+adx_length = input.int(14, title="ADX Length", minval=1, maxval=50)
+adx_threshold = input.float(20.0, title="ADX Threshold", minval=0, maxval=100, step=0.1)
+
+// =============================================================================
+// ADX CALCULATION - Exact Match to pandas_ta
+// =============================================================================
+
+// True Range
+tr = math.max(high - low, math.max(math.abs(high - close[1]), math.abs(low - close[1])))
+
+// Directional Movement
+up = high - high[1]
+down = low[1] - low
+
+// DM+ and DM-
+dm_plus = (up > down and up > 0) ? up : 0
+dm_minus = (down > up and down > 0) ? down : 0
+
+// Wilder's smoothing (RMA)
+tr_smooth = ta.rma(tr, adx_length)
+dm_plus_smooth = ta.rma(dm_plus, adx_length)
+dm_minus_smooth = ta.rma(dm_minus, adx_length)
+
+// DI+ and DI-
+di_plus = 100 * dm_plus_smooth / tr_smooth
+di_minus = 100 * dm_minus_smooth / tr_smooth
+
+// DX calculation
+dx = 100 * math.abs(di_plus - di_minus) / (di_plus + di_minus)
+
+// ADX - final smoothing
+adx = ta.rma(dx, adx_length)
+
+// =============================================================================
+// PLOTTING - ADX Line Only
+// =============================================================================
+
+// Plot ADX line (main indicator)
+plot(adx, title="ADX", color=color.rgb(0, 26, 255), linewidth=1)
+
+// Plot threshold line
+hline(adx_threshold, title="Threshold", color=color.rgb(255, 0, 0), linestyle=hline.style_dashed)

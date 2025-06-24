@@ -1,0 +1,25 @@
+//@version=6
+strategy("EMA Trend-Following By Minhaz", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+// === INPUTS ===
+fastLen = input.int(10, title="Fast EMA")
+slowLen = input.int(30, title="Slow EMA")
+
+// === INDICATORS ===
+emaFast = ta.ema(close, fastLen)
+emaSlow = ta.ema(close, slowLen)
+
+// === SIGNAL CONDITIONS ===
+longEntry = ta.crossover(emaFast, emaSlow)
+shortEntry = ta.crossunder(emaFast, emaSlow)
+
+// === ENTRIES ===
+if (longEntry)
+    strategy.entry("Long", strategy.long)
+
+if (shortEntry)
+    strategy.entry("Short", strategy.short)
+
+// === PLOT EMAs ===
+plot(emaFast, color=color.orange, title="Fast EMA")
+plot(emaSlow, color=color.blue, title="Slow EMA")

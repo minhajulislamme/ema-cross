@@ -240,7 +240,7 @@ class SmartTrendCatcher(TradingStrategy):
             # SELL Signal: Bearish crossover AND ADX > threshold
             elif latest['sell_signal']:
                 signal = 'SELL'
-                logger.info(f"� SELL Signal - EMA Bearish Crossover + Strong Trend")
+                logger.info(f"🔴 SELL Signal - EMA Bearish Crossover + Strong Trend")
                 logger.info(f"   Fast EMA ({self.ema_fast}) crossed BELOW Slow EMA ({self.ema_slow})")
                 logger.info(f"   Fast EMA: {latest['ema_fast']:.6f} < Slow EMA: {latest['ema_slow']:.6f}")
                 logger.info(f"   ADX ({self.adx_period}): {latest['adx']:.2f} > {self.adx_threshold} (strong trend)")
