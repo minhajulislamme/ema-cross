@@ -593,10 +593,76 @@ class BinanceClient:
         logger.error("Maximum retries reached when placing stop loss order")
         return None
     
-    # TAKE PROFIT FUNCTIONALITY REMOVED
-    # All take profit related methods have been removed as per new trading strategy
-    # Only stop loss orders are placed now
-    
+    def place_take_profit_order(self, symbol, side, quantity, stop_price, price=None):
+        """Place a take profit order"""
+        max_retries = 3
+        backoff_factor = 2
+        
+        # First, cancel any existing take profit orders for this symbol to avoid conflicts
+        try:
+            existing_orders = self.get_open_orders(symbol)
+            for order in existing_orders:
+                if (order.get('type') in ['TAKE_PROFIT_MARKET', 'TAKE_PROFIT'] and 
+                    order.get('symbol') == symbol):
+                    try:
+                        self.client.futures_cancel_order(
+                            symbol=symbol, 
+                            orderId=order.get('orderId')
+                        )
+                        logger.info(f"Cancelled existing take profit order {order.get('orderId')} for {symbol}")
+                    except Exception as e:
+                        logger.warning(f"Error cancelling existing take profit order: {e}")
+        except Exception as e:
+            logger.warning(f"Error checking existing take profit orders: {e}")
+            
+        # Place new take profit order
+        for retry in range(max_retries):
+            try:
+                params = {
+                    'symbol': symbol,
+                    'side': side,  # Opposite of position side
+                    'type': 'TAKE_PROFIT_MARKET',
+                    'closePosition': 'true',
+                    'stopPrice': stop_price,
+                }
+                if price:
+                    params['type'] = 'TAKE_PROFIT'
+                    params['timeInForce'] = 'GTC'
+                    params['quantity'] = quantity
+                    params['price'] = price
+                    
+                order = self.client.futures_create_order(**params)
+                logger.info(f"Placed take profit order at {stop_price}")
+                return order
+            except Exception as e:
+                error_str = str(e)
+                # Check for common error types that should be retried
+                retry_errors = [
+                    "Invalid JSON",
+                    "Connection reset",
+                    "Read timed out",
+                    "Connection aborted",
+                    "Connection refused",
+                    "code=0",
+                    "<!DOCTYPE html>"
+                ]
+                
+                should_retry = any(err in error_str for err in retry_errors)
+                
+                if should_retry and retry < max_retries - 1:
+                    wait_time = backoff_factor * (2 ** retry)
+                    logger.warning(f"Retrying place_take_profit_order due to error: {e}")
+                    time.sleep(wait_time)
+                else:
+                    if "<!DOCTYPE html>" in error_str:
+                        logger.error(f"Binance API returned HTML instead of JSON. Take profit order placement failed.")
+                        return None
+                    else:
+                        logger.error(f"Failed to place take profit: {e}")
+                        return None
+        
+        logger.error("Maximum retries reached when placing take profit order")
+        return None
     def cancel_all_open_orders(self, symbol):
         """Cancel all open orders for a symbol"""
         try:
@@ -687,22 +753,22 @@ class BinanceClient:
         return []
     
     def get_position_related_orders(self, symbol):
-        """Get all orders related to a position (stop loss orders only - take profit removed)"""
+        """Get all orders related to a position (stop loss and take profit orders)"""
         orders = self.get_open_orders(symbol)
         position_orders = []
         
         for order in orders:
-            # Only check for stop loss orders (take profit functionality removed)
-            if (order.get('type') in ['STOP_MARKET', 'STOP']
+            # Check for both stop loss and take profit orders
+            if (order.get('type') in ['STOP_MARKET', 'STOP', 'TAKE_PROFIT_MARKET', 'TAKE_PROFIT']
                 and order.get('symbol') == symbol):
                 position_orders.append(order)
                 
-        logger.info(f"Found {len(position_orders)} stop loss orders for {symbol}")
+        logger.info(f"Found {len(position_orders)} position-related orders for {symbol}")
         return position_orders
     
     def cancel_position_orders(self, symbol):
         """
-        Cancel all stop loss orders related to a position (take profit functionality removed)
+        Cancel all orders related to a position (stop loss and take profit orders)
         
         In multi-instance mode, this ensures only orders for the specific symbol are cancelled,
         allowing separate bot instances to operate independently for different trading pairs.

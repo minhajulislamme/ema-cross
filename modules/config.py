@@ -77,8 +77,7 @@ UPDATE_TRAILING_ON_HOLD = os.getenv('UPDATE_TRAILING_ON_HOLD', 'True').lower() =
 
 # Take profit settings - Fixed take profit (not trailing)
 USE_TAKE_PROFIT = os.getenv('USE_TAKE_PROFIT', 'True').lower() == 'true'
-TAKE_PROFIT_PCT = float(os.getenv('TAKE_PROFIT_PCT', '0.05'))  # 5% fixed take profit
-TAKE_PROFIT_MODE = os.getenv('TAKE_PROFIT_MODE', 'FIXED')  # FIXED or TRAILING (use FIXED for non-trailing TP)
+TAKE_PROFIT_PCT = float(os.getenv('TAKE_PROFIT_PCT', '0.06'))  # 6% fixed take profit
 
 # Enhanced backtesting parameters
 BACKTEST_START_DATE = os.getenv('BACKTEST_START_DATE', '2023-01-01')

@@ -38,7 +38,7 @@ from modules.config import (
     USE_TELEGRAM, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
     SEND_DAILY_REPORT, DAILY_REPORT_TIME, AUTO_COMPOUND,
     MULTI_INSTANCE_MODE, MAX_POSITIONS_PER_SYMBOL,
-    USE_TAKE_PROFIT, TAKE_PROFIT_PCT, TAKE_PROFIT_MODE,
+    USE_TAKE_PROFIT, TAKE_PROFIT_PCT,
     UPDATE_TRAILING_ON_HOLD,
     # Add these to your config.py:
     # BACKTEST_BEFORE_LIVE = True
@@ -1465,7 +1465,7 @@ def check_for_signals(symbol=None):
                             )
                             
                             if take_profit_price:
-                                tp_order = binance_client.place_limit_order(
+                                tp_order = binance_client.place_take_profit_order(
                                     symbol, "SELL", position_amount, take_profit_price
                                 )
                                 if tp_order:
@@ -1619,7 +1619,7 @@ def check_for_signals(symbol=None):
                             )
                             
                             if take_profit_price:
-                                tp_order = binance_client.place_limit_order(
+                                tp_order = binance_client.place_take_profit_order(
                                     symbol, "BUY", position_amount, take_profit_price
                                 )
                                 if tp_order:
@@ -2505,50 +2505,6 @@ def perform_test_trade(symbol=TRADING_SYMBOL):
         
         return False
 
-def place_take_profit_orders(symbol, side, quantity, entry_price, position_info=None):
-    """
-    Place fixed take profit orders for a position
-    
-    Args:
-        symbol: Trading symbol
-        side: Position side ('BUY' for LONG, 'SELL' for SHORT)
-        quantity: Position quantity
-        entry_price: Entry price of the position
-        position_info: Optional position information
-    
-    Returns:
-        List of placed take profit orders
-    """
-    if not USE_TAKE_PROFIT:
-        logger.info(f"Take profit functionality disabled for {symbol}")
-        return []
-    
-    try:
-        # Calculate take profit price
-        take_profit_price = risk_manager.calculate_take_profit(symbol, side, entry_price)
-        
-        if not take_profit_price:
-            logger.warning(f"Could not calculate take profit price for {symbol}")
-            return []
-        
-        # Determine opposite side for take profit order
-        opposite_side = "SELL" if side == "BUY" else "BUY"
-        
-        # Place take profit limit order
-        tp_order = binance_client.place_limit_order(
-            symbol, opposite_side, quantity, take_profit_price
-        )
-        
-        if tp_order:
-            logger.info(f"✅ Fixed take profit order placed: {opposite_side} {quantity} {symbol} at {take_profit_price}")
-            return [tp_order]
-        else:
-            logger.error(f"❌ Failed to place take profit order for {symbol}")
-            return []
-            
-    except Exception as e:
-        logger.error(f"Error placing take profit orders for {symbol}: {e}")
-        return []
 
 def generate_trade_chart(symbol, side, price, profit_loss=None):
     """

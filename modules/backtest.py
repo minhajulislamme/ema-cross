@@ -15,6 +15,7 @@ from modules.strategies import get_strategy
 from modules.config import (
     BACKTEST_INITIAL_BALANCE, BACKTEST_COMMISSION, LEVERAGE,
     USE_STOP_LOSS, STOP_LOSS_PCT, TRAILING_STOP, TRAILING_STOP_PCT,
+    USE_TAKE_PROFIT, TAKE_PROFIT_PCT,
     FIXED_TRADE_PERCENTAGE, MARGIN_SAFETY_FACTOR,
     BACKTEST_MIN_PROFIT_PCT, BACKTEST_MIN_WIN_RATE, BACKTEST_MAX_DRAWDOWN, BACKTEST_MIN_PROFIT_FACTOR
 )
@@ -430,8 +431,13 @@ class Backtester:
                 logger.warning(f"Insufficient balance: need {total_required:.2f}, have {self.current_balance:.2f}")
                 return False
             
-            # Take profit functionality removed - using stop loss only
+            # Calculate take profit if enabled
             take_profit = None
+            if USE_TAKE_PROFIT:
+                if signal == 'BUY':
+                    take_profit = price * (1 + TAKE_PROFIT_PCT)
+                else:  # signal == 'SELL'
+                    take_profit = price * (1 - TAKE_PROFIT_PCT)
             
             # Create enhanced position
             self.current_position = Position(
@@ -453,7 +459,11 @@ class Backtester:
             
             logger.info(f"Opened {signal} position: {quantity:.6f} @ {price:.6f}")
             logger.info(f"  Stop Loss: {stop_loss:.6f} ({risk_pct:.2f}% risk)")
-            logger.info(f"  Take Profit: Disabled (stop loss only strategy)")
+            if take_profit:
+                tp_pct = (abs(take_profit - price) / price * 100)
+                logger.info(f"  Take Profit: {take_profit:.6f} ({tp_pct:.1f}% target)")
+            else:
+                logger.info(f"  Take Profit: Disabled")
             logger.info(f"  Position Value: ${position_value:.2f}, Margin: ${required_margin:.2f}")
             logger.info(f"  🔄 Compounding Factor: {growth_factor:.2f}x (Balance: ${self.current_balance:.2f})")
             
@@ -595,8 +605,11 @@ class Backtester:
                     if self.current_position:
                         self.update_position(row)
                         
-                        # Check for stop loss only (take profit functionality removed)
-                        if self.current_position.should_stop_loss(price):
+                        # Check for take profit first (higher priority)
+                        if self.current_position.should_take_profit(price):
+                            self.close_position(row, "Take Profit")
+                        # Check for stop loss
+                        elif self.current_position.should_stop_loss(price):
                             self.close_position(row, "Stop Loss")
                     
                     # Get trading signal (only check if we have enough historical data)
