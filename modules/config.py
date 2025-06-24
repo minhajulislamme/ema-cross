@@ -66,7 +66,7 @@ SLOW_EMA = int(os.getenv('SLOW_EMA', '30'))    # Slow EMA (30 period)
 ADX_PERIOD = int(os.getenv('ADX_PERIOD', '14'))    # ADX period (14 is standard)
 ADX_THRESHOLD = float(os.getenv('ADX_THRESHOLD', '20'))  # ADX threshold for trend strength (<=20 = weak trend = HOLD)
 
-TIMEFRAME = os.getenv('TIMEFRAME', '5m')  # Default to 15 minutes, can be overridden
+TIMEFRAME = os.getenv('TIMEFRAME', '15m')  # Default to 15 minutes, can be overridden
 
 # Risk management - Enhanced stop loss and take profit settings
 USE_STOP_LOSS = os.getenv('USE_STOP_LOSS', 'True').lower() == 'true'
