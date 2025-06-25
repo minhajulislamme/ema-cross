@@ -11,7 +11,10 @@ from modules.config import (
     MULTI_INSTANCE_MODE, MAX_POSITIONS_PER_SYMBOL,
     LEVERAGE,
     MARGIN_SAFETY_FACTOR, MAX_POSITION_SIZE_PCT, MIN_FREE_BALANCE_PCT,
-    FIXED_TRADE_PERCENTAGE
+    FIXED_TRADE_PERCENTAGE,
+    # Hedging parameters
+    ENABLE_HEDGING, HEDGE_TRIGGER_PCT, HEDGE_SIZE_RATIO,
+    HEDGE_STOP_LOSS_PCT, HEDGE_TAKE_PROFIT_PCT, HEDGE_TRAILING_STOP, HEDGE_TRAILING_STOP_PCT
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +62,10 @@ class RiskManager:
         # Performance tracking for dynamic compounding
         self.recent_trades = []  # Store recent trade results
         self.compound_adjustment_factor = 1.0  # Dynamic adjustment to compounding rate
+        
+        # Hedging tracking
+        self.hedge_positions = {}  # Track hedge positions by symbol
+        self.main_positions = {}  # Track main positions by symbol for hedge management
         
     def calculate_position_size(self, symbol, side, price, stop_loss_price=None):
         """
@@ -639,10 +646,321 @@ class RiskManager:
         tracking state that might interfere with new positions.
         
         Args:
-            symbol: Trading pair symbol
+            symbol: The trading symbol to clear state for
         """
-        # This method is a placeholder for future trailing stop state management
-        # Currently, trailing stops are managed through Binance orders directly
-        # and don't require additional state clearing
+        # Clear any locked trailing stop states or position tracking
+        # This can be expanded if we add more position state tracking
         logger.debug(f"Cleared locked trailing stop state for {symbol}")
-        return True
+        pass
+    
+    # ================================
+    # HEDGING FUNCTIONALITY
+    # ================================
+    
+    def should_trigger_hedge(self, symbol, current_price):
+        """
+        Check if hedge should be triggered based on main position performance
+        
+        Args:
+            symbol: Trading symbol
+            current_price: Current market price
+            
+        Returns:
+            tuple: (should_hedge, main_position_info, hedge_side)
+        """
+        if not ENABLE_HEDGING:
+            return False, None, None
+            
+        # Get current position info
+        position_info = self.binance_client.get_position_info(symbol)
+        if not position_info or position_info['position_amount'] == 0:
+            return False, None, None
+            
+        # Check if we already have a hedge position
+        if symbol in self.hedge_positions:
+            logger.debug(f"Hedge already exists for {symbol}")
+            return False, position_info, None
+            
+        position_amount = position_info['position_amount']
+        entry_price = float(position_info.get('entry_price', 0))
+        unrealized_pnl = float(position_info.get('unrealized_pnl', 0))
+        
+        if entry_price == 0:
+            logger.warning(f"Cannot determine entry price for {symbol}")
+            return False, position_info, None
+            
+        # Determine position side and calculate stop loss
+        is_long = position_amount > 0
+        side = "LONG" if is_long else "SHORT"
+        
+        # Calculate the stop loss price that would be used
+        stop_loss_price = self.calculate_stop_loss(symbol, "BUY" if is_long else "SELL", entry_price)
+        
+        if not stop_loss_price:
+            logger.warning(f"Cannot calculate stop loss for {symbol}")
+            return False, position_info, None
+            
+        # Calculate current distance to stop loss vs trigger threshold
+        if is_long:
+            # For LONG position, stop loss is below entry price
+            max_loss = entry_price - stop_loss_price
+            current_loss = entry_price - current_price
+            loss_ratio = current_loss / max_loss if max_loss > 0 else 0
+        else:
+            # For SHORT position, stop loss is above entry price
+            max_loss = stop_loss_price - entry_price
+            current_loss = current_price - entry_price
+            loss_ratio = current_loss / max_loss if max_loss > 0 else 0
+            
+        # Trigger hedge if position has moved X% of the way to stop loss
+        should_hedge = loss_ratio >= HEDGE_TRIGGER_PCT
+        
+        if should_hedge:
+            hedge_side = "SHORT" if is_long else "LONG"
+            logger.info(f"🛡️ HEDGE TRIGGER: {symbol} {side} position is {loss_ratio:.1%} to stop loss (threshold: {HEDGE_TRIGGER_PCT:.1%})")
+            logger.info(f"Position P&L: {unrealized_pnl:.4f} USDT, Entry: {entry_price}, Current: {current_price}, Stop: {stop_loss_price}")
+            return True, position_info, hedge_side
+            
+        return False, position_info, None
+    
+    def open_hedge_position(self, symbol, main_position_info, hedge_side, current_price):
+        """
+        Open a hedge position opposite to the main position
+        
+        Args:
+            symbol: Trading symbol
+            main_position_info: Main position information
+            hedge_side: Side for hedge position ("LONG" or "SHORT")
+            current_price: Current market price
+            
+        Returns:
+            dict: Hedge position information if successful, None otherwise
+        """
+        try:
+            main_position_amount = abs(float(main_position_info['position_amount']))
+            
+            # Calculate hedge position size based on ratio
+            hedge_quantity = main_position_amount * HEDGE_SIZE_RATIO
+            
+            # Calculate stop loss and take profit for hedge
+            hedge_stop_loss = self.calculate_hedge_stop_loss(symbol, hedge_side, current_price)
+            hedge_take_profit = self.calculate_hedge_take_profit(symbol, hedge_side, current_price)
+            
+            # Place hedge order
+            order_side = "BUY" if hedge_side == "LONG" else "SELL"
+            logger.info(f"🛡️ Opening {hedge_side} hedge position: {hedge_quantity} {symbol} at ~{current_price}")
+            
+            order = self.binance_client.place_market_order(symbol, order_side, hedge_quantity)
+            
+            if order:
+                order_id = order.get('orderId', 'unknown')
+                logger.info(f"✅ Hedge position opened successfully with order ID: {order_id}")
+                
+                # Track hedge position
+                hedge_info = {
+                    'symbol': symbol,
+                    'side': hedge_side,
+                    'quantity': hedge_quantity,
+                    'entry_price': current_price,
+                    'stop_loss': hedge_stop_loss,
+                    'take_profit': hedge_take_profit,
+                    'order_id': order_id,
+                    'opened_at': datetime.now(),
+                    'main_position_entry': float(main_position_info.get('entry_price', 0))
+                }
+                
+                self.hedge_positions[symbol] = hedge_info
+                self.main_positions[symbol] = main_position_info
+                
+                # Place protective orders for hedge
+                self._place_hedge_protective_orders(symbol, hedge_info)
+                
+                return hedge_info
+            else:
+                logger.error(f"❌ Failed to open hedge position for {symbol}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error opening hedge position for {symbol}: {e}")
+            return None
+    
+    def calculate_hedge_stop_loss(self, symbol, hedge_side, entry_price):
+        """Calculate stop loss price for hedge position"""
+        if hedge_side == "LONG":
+            return entry_price * (1 - HEDGE_STOP_LOSS_PCT)
+        else:
+            return entry_price * (1 + HEDGE_STOP_LOSS_PCT)
+    
+    def calculate_hedge_take_profit(self, symbol, hedge_side, entry_price):
+        """Calculate take profit price for hedge position"""
+        if hedge_side == "LONG":
+            return entry_price * (1 + HEDGE_TAKE_PROFIT_PCT)
+        else:
+            return entry_price * (1 - HEDGE_TAKE_PROFIT_PCT)
+    
+    def _place_hedge_protective_orders(self, symbol, hedge_info):
+        """Place stop loss and take profit orders for hedge position"""
+        try:
+            # Place stop loss order
+            if hedge_info['stop_loss']:
+                stop_side = "SELL" if hedge_info['side'] == "LONG" else "BUY"
+                logger.info(f"🛡️ Placing hedge stop loss at {hedge_info['stop_loss']}")
+                # Note: You may need to implement OCO orders or use different order types
+                # depending on your exchange requirements
+                
+            # Place take profit order
+            if hedge_info['take_profit']:
+                tp_side = "SELL" if hedge_info['side'] == "LONG" else "BUY"
+                logger.info(f"🛡️ Placing hedge take profit at {hedge_info['take_profit']}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error placing hedge protective orders for {symbol}: {e}")
+    
+    def monitor_hedge_positions(self, symbol, current_price):
+        """
+        Monitor and manage existing hedge positions
+        
+        Args:
+            symbol: Trading symbol
+            current_price: Current market price
+        """
+        if symbol not in self.hedge_positions:
+            return
+            
+        hedge_info = self.hedge_positions[symbol]
+        entry_price = hedge_info['entry_price']
+        hedge_side = hedge_info['side']
+        
+        # Check if hedge take profit is hit
+        take_profit_price = hedge_info.get('take_profit')
+        if take_profit_price:
+            tp_hit = False
+            if hedge_side == "LONG" and current_price >= take_profit_price:
+                tp_hit = True
+            elif hedge_side == "SHORT" and current_price <= take_profit_price:
+                tp_hit = True
+                
+            if tp_hit:
+                hedge_profit = self._calculate_hedge_profit(hedge_info, current_price)
+                logger.info(f"🛡️ Hedge take profit hit! Profit: {hedge_profit:.4f} USDT")
+                self.close_hedge_position(symbol, "take_profit_hit")
+                return
+        
+        # Check trailing stop for hedge position (only if not hit take profit)
+        if HEDGE_TRAILING_STOP:
+            self._update_hedge_trailing_stop(symbol, hedge_info, current_price)
+    
+    def _update_hedge_trailing_stop(self, symbol, hedge_info, current_price):
+        """Update trailing stop for hedge position"""
+        try:
+            hedge_side = hedge_info['side']
+            entry_price = hedge_info['entry_price']
+            current_stop = hedge_info.get('stop_loss')
+            
+            if hedge_side == "LONG":
+                # For LONG hedge, move stop up as price rises
+                potential_stop = current_price * (1 - HEDGE_TRAILING_STOP_PCT)
+                if not current_stop or potential_stop > current_stop:
+                    hedge_info['stop_loss'] = potential_stop
+                    logger.info(f"🛡️ Updated LONG hedge trailing stop to {potential_stop:.6f}")
+            else:
+                # For SHORT hedge, move stop down as price falls
+                potential_stop = current_price * (1 + HEDGE_TRAILING_STOP_PCT)
+                if not current_stop or potential_stop < current_stop:
+                    hedge_info['stop_loss'] = potential_stop
+                    logger.info(f"🛡️ Updated SHORT hedge trailing stop to {potential_stop:.6f}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error updating hedge trailing stop for {symbol}: {e}")
+    
+    def close_hedge_position(self, symbol, reason="manual"):
+        """
+        Close hedge position
+        
+        Args:
+            symbol: Trading symbol
+            reason: Reason for closing hedge
+        """
+        if symbol not in self.hedge_positions:
+            logger.warning(f"No hedge position found for {symbol}")
+            return False
+            
+        try:
+            hedge_info = self.hedge_positions[symbol]
+            hedge_side = hedge_info['side']
+            
+            # Get current hedge position from exchange
+            position_info = self.binance_client.get_position_info(symbol)
+            if not position_info or position_info['position_amount'] == 0:
+                logger.info(f"🛡️ Hedge position for {symbol} already closed")
+                del self.hedge_positions[symbol]
+                return True
+                
+            # Close the hedge position
+            close_side = "SELL" if hedge_side == "LONG" else "BUY"
+            hedge_quantity = abs(float(position_info['position_amount']))
+            
+            logger.info(f"🛡️ Closing {hedge_side} hedge position: {hedge_quantity} {symbol} (reason: {reason})")
+            
+            order = self.binance_client.place_market_order(symbol, close_side, hedge_quantity)
+            
+            if order:
+                logger.info(f"✅ Hedge position closed successfully for {symbol}")
+                # Calculate hedge P&L for logging
+                entry_price = hedge_info['entry_price']
+                current_price = float(position_info.get('mark_price', entry_price))
+                
+                if hedge_side == "LONG":
+                    hedge_pnl = (current_price - entry_price) * hedge_quantity
+                else:
+                    hedge_pnl = (entry_price - current_price) * hedge_quantity
+                    
+                logger.info(f"🛡️ Hedge P&L: {hedge_pnl:.4f} USDT")
+                
+                # Clean up tracking
+                del self.hedge_positions[symbol]
+                if symbol in self.main_positions:
+                    del self.main_positions[symbol]
+                    
+                return True
+            else:
+                logger.error(f"❌ Failed to close hedge position for {symbol}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error closing hedge position for {symbol}: {e}")
+            return False
+    
+    def get_hedge_status(self, symbol):
+        """Get hedge position status for a symbol"""
+        if symbol in self.hedge_positions:
+            return self.hedge_positions[symbol]
+        return None
+    
+    def _calculate_hedge_profit(self, hedge_info, current_price):
+        """Calculate current profit/loss of hedge position"""
+        entry_price = hedge_info['entry_price']
+        quantity = hedge_info['quantity']
+        hedge_side = hedge_info['side']
+        
+        if hedge_side == "LONG":
+            return (current_price - entry_price) * quantity
+        else:
+            return (entry_price - current_price) * quantity
+    
+    def close_hedge_on_new_signal(self, symbol, new_signal):
+        """
+        Close hedge position when new trading signal is generated
+        
+        Args:
+            symbol: Trading symbol
+            new_signal: New signal ('BUY', 'SELL', or 'HOLD')
+        """
+        if symbol not in self.hedge_positions:
+            return False
+            
+        if new_signal in ['BUY', 'SELL']:
+            logger.info(f"🛡️ New {new_signal} signal detected, closing hedge position")
+            return self.close_hedge_position(symbol, f"new_{new_signal.lower()}_signal")
+            
+        return False

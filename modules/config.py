@@ -66,7 +66,7 @@ SLOW_EMA = int(os.getenv('SLOW_EMA', '30'))    # Slow EMA (30 period)
 ADX_PERIOD = int(os.getenv('ADX_PERIOD', '14'))    # ADX period (14 is standard)
 ADX_THRESHOLD = float(os.getenv('ADX_THRESHOLD', '20'))  # ADX threshold for trend strength (<=20 = weak trend = HOLD)
 
-TIMEFRAME = os.getenv('TIMEFRAME', '15m')  # Default to 15 minutes, can be overridden
+TIMEFRAME = os.getenv('TIMEFRAME', '5m')  # Default to 15 minutes, can be overridden
 
 # Risk management - Enhanced stop loss and take profit settings
 USE_STOP_LOSS = os.getenv('USE_STOP_LOSS', 'True').lower() == 'true'
@@ -93,6 +93,22 @@ BACKTEST_MIN_WIN_RATE = float(os.getenv('BACKTEST_MIN_WIN_RATE', '40.0'))  # Mor
 BACKTEST_MAX_DRAWDOWN = float(os.getenv('BACKTEST_MAX_DRAWDOWN', '30.0'))  # Allow higher DD for longer periods
 BACKTEST_MIN_PROFIT_FACTOR = float(os.getenv('BACKTEST_MIN_PROFIT_FACTOR', '1.2'))  # More conservative
 BACKTEST_PERIOD = os.getenv('BACKTEST_PERIOD', '90 days')  # Default to 90 days for comprehensive testing
+
+# Hedging Configuration
+ENABLE_HEDGING = os.getenv('ENABLE_HEDGING', 'True').lower() == 'true'
+HEDGE_TRIGGER_PCT = float(os.getenv('HEDGE_TRIGGER_PCT', '0.70'))  # Trigger hedge when position is 70% of way to stop loss
+HEDGE_SIZE_RATIO = float(os.getenv('HEDGE_SIZE_RATIO', '1.0'))  # Hedge position size ratio (1.0 = same size as original)
+HEDGE_STOP_LOSS_PCT = float(os.getenv('HEDGE_STOP_LOSS_PCT', '0.015'))  # 1.5% stop loss for hedge position
+HEDGE_TAKE_PROFIT_PCT = float(os.getenv('HEDGE_TAKE_PROFIT_PCT', '0.06'))  # 6% take profit for hedge position
+HEDGE_TRAILING_STOP = os.getenv('HEDGE_TRAILING_STOP', 'True').lower() == 'true'
+HEDGE_TRAILING_STOP_PCT = float(os.getenv('HEDGE_TRAILING_STOP_PCT', '0.015'))  # 1.5% trailing stop for hedge
+
+# Hedge Exit Strategy
+# Note: Hedge closes automatically on:
+# 1. Take profit hit (4% profit on hedge position)
+# 2. New BUY/SELL signal generated  
+# 3. Main position closed manually
+# HEDGE_EXIT_ON_MAIN_PROFIT and HEDGE_EXIT_PROFIT_THRESHOLD removed - hedge runs independently
 
 # Logging and notifications
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')

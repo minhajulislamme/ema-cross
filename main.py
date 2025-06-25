@@ -40,6 +40,9 @@ from modules.config import (
     MULTI_INSTANCE_MODE, MAX_POSITIONS_PER_SYMBOL,
     USE_TAKE_PROFIT, TAKE_PROFIT_PCT,
     UPDATE_TRAILING_ON_HOLD,
+    # Add hedging config imports
+    ENABLE_HEDGING, HEDGE_TRIGGER_PCT, HEDGE_SIZE_RATIO,
+    HEDGE_STOP_LOSS_PCT, HEDGE_TAKE_PROFIT_PCT, HEDGE_TRAILING_STOP,
     # Add these to your config.py:
     # BACKTEST_BEFORE_LIVE = True
     # BACKTEST_MIN_PROFIT_PCT = 5.0
@@ -1210,6 +1213,33 @@ def check_for_signals(symbol=None):
         
         logger.info(f"📊 Current position amount: {position_amount}")
         
+        # ========================================
+        # HEDGING FUNCTIONALITY CHECK
+        # ========================================
+        if position_amount != 0:  # Only check hedging if we have a position
+            # Check if hedge should be triggered
+            should_hedge, main_pos_info, hedge_side = risk_manager.should_trigger_hedge(symbol, current_price)
+            
+            if should_hedge and hedge_side:
+                logger.info(f"🛡️ HEDGING TRIGGERED for {symbol}")
+                hedge_info = risk_manager.open_hedge_position(symbol, main_pos_info, hedge_side, current_price)
+                if hedge_info:
+                    # Send notification about hedge activation
+                    try:
+                        notifier = TelegramNotifier()
+                        hedge_msg = (f"🛡️ HEDGE ACTIVATED\n"
+                                   f"Symbol: {symbol}\n"
+                                   f"Main Position: {'LONG' if position_amount > 0 else 'SHORT'} {abs(position_amount)}\n"
+                                   f"Hedge Position: {hedge_side} {hedge_info['quantity']}\n"
+                                   f"Current Price: {current_price}\n"
+                                   f"Hedge Entry: {hedge_info['entry_price']}")
+                        notifier.send_message(hedge_msg)
+                    except Exception as e:
+                        logger.warning(f"Failed to send hedge notification: {e}")
+            
+            # Monitor existing hedge positions
+            risk_manager.monitor_hedge_positions(symbol, current_price)
+        
         # WebSocket buffer data verification 
         logger.info("🔍 === WEBSOCKET BUFFER DATA VERIFICATION ===")
         
@@ -1244,6 +1274,21 @@ def check_for_signals(symbol=None):
         rolling_buffer.signals_generated += 1
         
         logger.info(f"🎯 === WEBSOCKET-ONLY SIGNAL: {signal} ===")
+        
+        # Close hedge position on new BUY/SELL signal
+        if signal in ['BUY', 'SELL']:
+            hedge_closed = risk_manager.close_hedge_on_new_signal(symbol, signal)
+            if hedge_closed:
+                # Send notification about hedge closure due to new signal
+                try:
+                    notifier = TelegramNotifier()
+                    hedge_msg = (f"🛡️ HEDGE CLOSED - NEW SIGNAL\n"
+                               f"Symbol: {symbol}\n"
+                               f"Reason: New {signal} signal detected\n"
+                               f"Current Price: {current_price}")
+                    notifier.send_message(hedge_msg)
+                except Exception as e:
+                    logger.warning(f"Failed to send hedge closure notification: {e}")
         
         # Verify signal source and log appropriately
         if signal in ['BUY', 'SELL']:
@@ -1288,7 +1333,16 @@ def check_for_signals(symbol=None):
             logger.info("HOLD signal received. No trading action taken.")
             if position and abs(position['position_amount']) > 0:
                 position_side = "LONG" if position['position_amount'] > 0 else "SHORT"
-                logger.info(f"Current position: {position_side} {abs(position['position_amount'])} {symbol} at {position.get('entry_price', 'unknown')} (unrealized PnL: {position.get('unrealized_pnl', 0):.4f})")
+                main_pnl = position.get('unrealized_pnl', 0)
+                logger.info(f"Current position: {position_side} {abs(position['position_amount'])} {symbol} at {position.get('entry_price', 'unknown')} (unrealized PnL: {main_pnl:.4f})")
+                
+                # Display hedge status if exists
+                hedge_status = risk_manager.get_hedge_status(symbol)
+                if hedge_status:
+                    hedge_duration = datetime.now() - hedge_status['opened_at']
+                    logger.info(f"🛡️ Active Hedge: {hedge_status['side']} {hedge_status['quantity']} at {hedge_status['entry_price']} (Duration: {hedge_duration})")
+                else:
+                    logger.info("🛡️ No active hedge position")
                 
                 # Update trailing stop loss on HOLD signal if enabled
                 if UPDATE_TRAILING_ON_HOLD:
@@ -1375,6 +1429,12 @@ def check_for_signals(symbol=None):
                     
                     # Clear locked trailing stop since position is closed
                     risk_manager.clear_locked_trailing_stop(symbol)
+                    
+                    # Close any existing hedge position when main position is closed
+                    hedge_status = risk_manager.get_hedge_status(symbol)
+                    if hedge_status:
+                        logger.info("🛡️ Closing hedge position as main position was closed")
+                        risk_manager.close_hedge_position(symbol, "main_position_closed")
                     
                     # Check if position was actually closed (sometimes there can be a delay)
                     time.sleep(1)  # Wait a moment for the order to process
@@ -1528,6 +1588,12 @@ def check_for_signals(symbol=None):
                     
                     # Clear locked trailing stop since position is closed
                     risk_manager.clear_locked_trailing_stop(symbol)
+                    
+                    # Close any existing hedge position when main position is closed
+                    hedge_status = risk_manager.get_hedge_status(symbol)
+                    if hedge_status:
+                        logger.info("🛡️ Closing hedge position as main position was closed")
+                        risk_manager.close_hedge_position(symbol, "main_position_closed")
                     
                     # Check if position was actually closed (sometimes there can be a delay)
                     time.sleep(1)  # Wait a moment for the order to process
@@ -1695,7 +1761,7 @@ def generate_performance_report():
         logger.error(f"Error getting current balance: {e}")
         current_balance = stats['current_balance']  # Use last known balance
     
-    # Calculate profit metrics with proper handling of small values
+    # Calculate profit metrics with proper handling of small
     profit_loss = current_balance - stats['start_balance']
     profit_pct = (profit_loss / stats['start_balance']) * 100 if stats['start_balance'] > 0 else 0
     
