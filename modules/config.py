@@ -25,7 +25,7 @@ else:
 RECV_WINDOW = int(os.getenv('BINANCE_RECV_WINDOW', '10000'))
 
 # Trading parameters
-TRADING_SYMBOL = os.getenv('TRADING_SYMBOL', 'SUIUSDT')
+TRADING_SYMBOL = os.getenv('TRADING_SYMBOL', 'ETHUSDT')
 TRADING_TYPE = 'FUTURES'  # Use futures trading
 LEVERAGE = int(os.getenv('LEVERAGE', '20'))
 MARGIN_TYPE = os.getenv('MARGIN_TYPE', 'CROSSED')  # ISOLATED or CROSSED
