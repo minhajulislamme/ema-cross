@@ -1421,7 +1421,7 @@ def check_for_signals(symbol=None):
                 # Close short position with market order
                 close_amount = abs(position_amount)
                 logger.info(f"Placing BUY order to close SHORT position: {close_amount} {symbol}")
-                close_order = binance_client.place_market_order(symbol, "BUY", close_amount)
+                close_order = binance_client.place_market_order(symbol, "BUY", close_amount, is_closing=True)
                 
                 if close_order:
                     order_id = close_order.get('orderId', 'unknown')
@@ -1442,7 +1442,7 @@ def check_for_signals(symbol=None):
                     if position and position['position_amount'] > 0.0001:  # Using a small threshold
                         logger.warning(f"⚠️ Position not fully closed. Remaining: {position['position_amount']}. Trying again...")
                         remaining = position['position_amount']
-                        binance_client.place_market_order(symbol, "BUY", remaining)
+                        binance_client.place_market_order(symbol, "BUY", remaining, is_closing=True)
                         time.sleep(1)  # Wait for the second attempt to process
                 else:
                     logger.error("❌ Failed to close SHORT position! Cannot proceed with opening LONG position.")
@@ -1580,7 +1580,7 @@ def check_for_signals(symbol=None):
                 # Close long position with market order
                 close_amount = position_amount
                 logger.info(f"Placing SELL order to close LONG position: {close_amount} {symbol}")
-                close_order = binance_client.place_market_order(symbol, "SELL", close_amount)
+                close_order = binance_client.place_market_order(symbol, "SELL", close_amount, is_closing=True)
                 
                 if close_order:
                     order_id = close_order.get('orderId', 'unknown')
@@ -1601,7 +1601,7 @@ def check_for_signals(symbol=None):
                     if position and position['position_amount'] > 0.0001:  # Using a small threshold
                         logger.warning(f"⚠️ Position not fully closed. Remaining: {position['position_amount']}. Trying again...")
                         remaining = position['position_amount']
-                        binance_client.place_market_order(symbol, "SELL", remaining)
+                        binance_client.place_market_order(symbol, "SELL", remaining, is_closing=True)
                         time.sleep(1)  # Wait for the second attempt to process
                 else:
                     logger.error("❌ Failed to close LONG position! Cannot proceed with opening SHORT position.")

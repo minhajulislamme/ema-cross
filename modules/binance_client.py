@@ -17,6 +17,7 @@ class BinanceClient:
         self.client = self._initialize_client()
         self.futures_initialized = False
         self.use_spot_fallback = False  # Flag to indicate if we should fall back to spot API
+        self.hedge_mode = False  # Initialize hedge mode flag
         
     def _initialize_client(self):
         for attempt in range(RETRY_COUNT):
@@ -112,6 +113,14 @@ class BinanceClient:
             # Set leverage
             self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
             logger.info(f"Set leverage to {leverage}x for {symbol}")
+            
+            # Check if account is in hedge mode
+            self.hedge_mode = self._is_hedge_mode_enabled()
+            if self.hedge_mode:
+                logger.info("Account is in Hedge Mode - will use positionSide in orders")
+            else:
+                logger.info("Account is in One-way Mode - will use BOTH positionSide")
+                
             self.futures_initialized = True
         except BinanceAPIException as e:
             logger.error(f"Failed to set leverage: {e}")
@@ -430,20 +439,26 @@ class BinanceClient:
         self.client.options['timeout'] = current_timeout
         return []
     
-    def place_market_order(self, symbol, side, quantity):
+    def place_market_order(self, symbol, side, quantity, is_closing=False):
         """Place a market order in futures market"""
         max_retries = 3
         backoff_factor = 2
         
+        # Get the appropriate position side for hedge mode
+        position_side = self._get_position_side(side, symbol, is_closing)
+        
         for retry in range(max_retries):
             try:
-                order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side=side,  # "BUY" or "SELL"
-                    type="MARKET",
-                    quantity=quantity
-                )
-                logger.info(f"Placed {side} market order for {quantity} {symbol}")
+                order_params = {
+                    'symbol': symbol,
+                    'side': side,  # "BUY" or "SELL"
+                    'type': "MARKET",
+                    'quantity': quantity,
+                    'positionSide': position_side
+                }
+                
+                order = self.client.futures_create_order(**order_params)
+                logger.info(f"Placed {side} market order for {quantity} {symbol} (positionSide: {position_side})")
                 return order
             except Exception as e:
                 error_str = str(e)
@@ -475,22 +490,28 @@ class BinanceClient:
         logger.error("Maximum retries reached when placing market order")
         return None
     
-    def place_limit_order(self, symbol, side, quantity, price):
+    def place_limit_order(self, symbol, side, quantity, price, is_closing=False):
         """Place a limit order in futures market"""
         max_retries = 3
         backoff_factor = 2
         
+        # Get the appropriate position side for hedge mode
+        position_side = self._get_position_side(side, symbol, is_closing)
+        
         for retry in range(max_retries):
             try:
-                order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side=side,
-                    type="LIMIT",
-                    timeInForce="GTC",  # Good Till Cancelled
-                    quantity=quantity,
-                    price=price
-                )
-                logger.info(f"Placed {side} limit order for {quantity} {symbol} at {price}")
+                order_params = {
+                    'symbol': symbol,
+                    'side': side,
+                    'type': "LIMIT",
+                    'timeInForce': "GTC",  # Good Till Cancelled
+                    'quantity': quantity,
+                    'price': price,
+                    'positionSide': position_side
+                }
+                
+                order = self.client.futures_create_order(**order_params)
+                logger.info(f"Placed {side} limit order for {quantity} {symbol} at {price} (positionSide: {position_side})")
                 return order
             except Exception as e:
                 error_str = str(e)
@@ -522,10 +543,13 @@ class BinanceClient:
         logger.error("Maximum retries reached when placing limit order")
         return None
     
-    def place_stop_loss_order(self, symbol, side, quantity, stop_price, price=None):
+    def place_stop_loss_order(self, symbol, side, quantity, stop_price, price=None, is_closing=True):
         """Place a stop loss order"""
         max_retries = 3
         backoff_factor = 2
+        
+        # Get the appropriate position side for hedge mode (this is a closing order)
+        position_side = self._get_position_side(side, symbol, is_closing=True)
         
         # First, cancel any existing stop loss orders for this symbol to avoid conflicts
         try:
@@ -551,17 +575,26 @@ class BinanceClient:
                     'symbol': symbol,
                     'side': side,  # Opposite of position side
                     'type': 'STOP_MARKET',
-                    'closePosition': 'true',
                     'stopPrice': stop_price,
+                    'positionSide': position_side
                 }
+                
+                # In hedge mode, we need to specify quantity instead of closePosition
+                if self.hedge_mode:
+                    params['quantity'] = quantity
+                else:
+                    params['closePosition'] = 'true'
+                
                 if price:
                     params['type'] = 'STOP'
                     params['timeInForce'] = 'GTC'
                     params['quantity'] = quantity
                     params['price'] = price
+                    # Remove closePosition when using STOP with price
+                    params.pop('closePosition', None)
                     
                 order = self.client.futures_create_order(**params)
-                logger.info(f"Placed stop loss order at {stop_price}")
+                logger.info(f"Placed stop loss order at {stop_price} (positionSide: {position_side})")
                 return order
             except Exception as e:
                 error_str = str(e)
@@ -593,10 +626,13 @@ class BinanceClient:
         logger.error("Maximum retries reached when placing stop loss order")
         return None
     
-    def place_take_profit_order(self, symbol, side, quantity, stop_price, price=None):
+    def place_take_profit_order(self, symbol, side, quantity, stop_price, price=None, is_closing=True):
         """Place a take profit order"""
         max_retries = 3
         backoff_factor = 2
+        
+        # Get the appropriate position side for hedge mode (this is a closing order)
+        position_side = self._get_position_side(side, symbol, is_closing=True)
         
         # First, cancel any existing take profit orders for this symbol to avoid conflicts
         try:
@@ -622,17 +658,26 @@ class BinanceClient:
                     'symbol': symbol,
                     'side': side,  # Opposite of position side
                     'type': 'TAKE_PROFIT_MARKET',
-                    'closePosition': 'true',
                     'stopPrice': stop_price,
+                    'positionSide': position_side
                 }
+                
+                # In hedge mode, we need to specify quantity instead of closePosition
+                if self.hedge_mode:
+                    params['quantity'] = quantity
+                else:
+                    params['closePosition'] = 'true'
+                
                 if price:
                     params['type'] = 'TAKE_PROFIT'
                     params['timeInForce'] = 'GTC'
                     params['quantity'] = quantity
                     params['price'] = price
+                    # Remove closePosition when using TAKE_PROFIT with price
+                    params.pop('closePosition', None)
                     
                 order = self.client.futures_create_order(**params)
-                logger.info(f"Placed take profit order at {stop_price}")
+                logger.info(f"Placed take profit order at {stop_price} (positionSide: {position_side})")
                 return order
             except Exception as e:
                 error_str = str(e)
@@ -833,3 +878,157 @@ class BinanceClient:
                 
         logger.info(f"Cancelled {cancelled} stop loss orders for {symbol} (preserved take profit orders)")
         return cancelled
+    
+    def _is_hedge_mode_enabled(self):
+        """Check if the account is in hedge mode (dual position mode)"""
+        try:
+            account_config = self.client.futures_get_position_mode()
+            return account_config.get('dualSidePosition', False)
+        except Exception as e:
+            logger.warning(f"Could not determine position mode: {e}. Assuming hedge mode is enabled.")
+            return True  # Default to True since user mentioned enabling hedge mode
+    
+    def _get_position_side(self, side, symbol=None, is_closing=False):
+        """
+        Determine the correct positionSide based on order side and current positions
+        
+        Args:
+            side: "BUY" or "SELL"
+            symbol: Trading symbol (optional, for checking existing positions)
+            is_closing: Whether this is a closing order
+        
+        Returns:
+            "LONG", "SHORT", or "BOTH"
+        """
+        if not hasattr(self, 'hedge_mode'):
+            self.hedge_mode = self._is_hedge_mode_enabled()
+            
+        if not self.hedge_mode:
+            return "BOTH"
+        
+        # In hedge mode, determine position side
+        if is_closing and symbol:
+            # For closing orders, we need to check current positions
+            try:
+                positions = self.get_positions(symbol)
+                for pos in positions:
+                    pos_amt = float(pos.get('positionAmt', 0))
+                    if abs(pos_amt) > 0:
+                        # Close the side that matches the position
+                        if pos_amt > 0:  # Long position exists
+                            return "LONG" 
+                        else:  # Short position exists
+                            return "SHORT"
+            except Exception as e:
+                logger.warning(f"Error checking positions for closing order: {e}")
+                
+            # If no position found but is closing, determine by side
+            # BUY to close SHORT position -> use SHORT positionSide
+            # SELL to close LONG position -> use LONG positionSide
+            if side == "BUY":
+                return "SHORT"  # Closing a short position
+            elif side == "SELL":
+                return "LONG"   # Closing a long position
+        
+        # For opening orders or when we can't determine current position
+        if side == "BUY":
+            return "LONG"
+        elif side == "SELL":
+            return "SHORT"
+        else:
+            return "BOTH"
+    
+    def get_positions(self, symbol=None):
+        """Get all positions or positions for a specific symbol"""
+        try:
+            positions = self.client.futures_position_information(symbol=symbol)
+            if symbol:
+                # Return positions for specific symbol
+                return [pos for pos in positions if pos['symbol'] == symbol and float(pos.get('positionAmt', 0)) != 0]
+            else:
+                # Return all non-zero positions
+                return [pos for pos in positions if float(pos.get('positionAmt', 0)) != 0]
+        except Exception as e:
+            logger.error(f"Error getting positions: {e}")
+            return []
+    
+    def get_position_info_hedge_aware(self, symbol, position_side=None):
+        """
+        Get position information with hedge mode awareness
+        
+        Args:
+            symbol: Trading symbol
+            position_side: "LONG", "SHORT", or None (returns net position)
+        
+        Returns:
+            Position data or None
+        """
+        max_retries = 5
+        backoff_factor = 2
+        
+        for retry in range(max_retries):
+            try:
+                if retry > 0:
+                    initial_pause = 0.5 * retry
+                    time.sleep(initial_pause)
+                
+                positions = self.client.futures_position_information(symbol=symbol)
+                
+                if not self.hedge_mode or position_side is None:
+                    # One-way mode or net position requested
+                    for position in positions:
+                        if position['symbol'] == symbol:
+                            pos_amt = float(position.get('positionAmt', 0))
+                            if abs(pos_amt) > 0:
+                                return {
+                                    'symbol': position['symbol'],
+                                    'position_amount': pos_amt,
+                                    'entry_price': float(position.get('entryPrice', 0)),
+                                    'unrealized_profit': float(position.get('unRealizedProfit', 0)),
+                                    'leverage': int(position.get('leverage', 1)),
+                                    'isolated': position.get('isolated', False),
+                                    'position_side': position.get('positionSide', 'BOTH')
+                                }
+                else:
+                    # Hedge mode - look for specific position side
+                    for position in positions:
+                        if (position['symbol'] == symbol and 
+                            position.get('positionSide') == position_side):
+                            pos_amt = float(position.get('positionAmt', 0))
+                            if abs(pos_amt) > 0:
+                                return {
+                                    'symbol': position['symbol'],
+                                    'position_amount': pos_amt,
+                                    'entry_price': float(position.get('entryPrice', 0)),
+                                    'unrealized_profit': float(position.get('unRealizedProfit', 0)),
+                                    'leverage': int(position.get('leverage', 1)),
+                                    'isolated': position.get('isolated', False),
+                                    'position_side': position.get('positionSide', 'BOTH')
+                                }
+                
+                return None
+                
+            except Exception as e:
+                error_str = str(e)
+                retry_errors = [
+                    "Invalid JSON",
+                    "Connection reset", 
+                    "Read timed out",
+                    "Connection aborted",
+                    "Connection refused",
+                    "code=0",
+                    "<!DOCTYPE html>",
+                    "RemoteDisconnected"
+                ]
+                
+                should_retry = any(err in error_str for err in retry_errors)
+                
+                if should_retry and retry < max_retries - 1:
+                    wait_time = backoff_factor * (2 ** retry)
+                    logger.warning(f"Retrying get_position_info_hedge_aware due to error: {e}")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to get position info (hedge aware): {e}")
+                    return None
+        
+        return None

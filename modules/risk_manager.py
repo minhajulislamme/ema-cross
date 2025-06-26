@@ -801,17 +801,33 @@ class RiskManager:
     def _place_hedge_protective_orders(self, symbol, hedge_info):
         """Place stop loss and take profit orders for hedge position"""
         try:
+            hedge_quantity = hedge_info['quantity']
+            
             # Place stop loss order
             if hedge_info['stop_loss']:
                 stop_side = "SELL" if hedge_info['side'] == "LONG" else "BUY"
                 logger.info(f"🛡️ Placing hedge stop loss at {hedge_info['stop_loss']}")
-                # Note: You may need to implement OCO orders or use different order types
-                # depending on your exchange requirements
                 
-            # Place take profit order
+                sl_order = self.binance_client.place_stop_loss_order(
+                    symbol, stop_side, hedge_quantity, hedge_info['stop_loss']
+                )
+                if sl_order:
+                    logger.info(f"✅ Hedge stop loss order placed: {sl_order.get('orderId')}")
+                else:
+                    logger.warning(f"⚠️ Failed to place hedge stop loss order")
+                
+            # Place take profit order  
             if hedge_info['take_profit']:
                 tp_side = "SELL" if hedge_info['side'] == "LONG" else "BUY"
                 logger.info(f"🛡️ Placing hedge take profit at {hedge_info['take_profit']}")
+                
+                tp_order = self.binance_client.place_take_profit_order(
+                    symbol, tp_side, hedge_quantity, hedge_info['take_profit']
+                )
+                if tp_order:
+                    logger.info(f"✅ Hedge take profit order placed: {tp_order.get('orderId')}")
+                else:
+                    logger.warning(f"⚠️ Failed to place hedge take profit order")
                 
         except Exception as e:
             logger.error(f"❌ Error placing hedge protective orders for {symbol}: {e}")
@@ -902,7 +918,7 @@ class RiskManager:
             
             logger.info(f"🛡️ Closing {hedge_side} hedge position: {hedge_quantity} {symbol} (reason: {reason})")
             
-            order = self.binance_client.place_market_order(symbol, close_side, hedge_quantity)
+            order = self.binance_client.place_market_order(symbol, close_side, hedge_quantity, is_closing=True)
             
             if order:
                 logger.info(f"✅ Hedge position closed successfully for {symbol}")
